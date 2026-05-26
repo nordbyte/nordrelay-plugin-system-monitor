@@ -70,7 +70,9 @@ let DatabaseSyncClass;
 
 if (isDirectCliEntry()) {
   runPlugin().catch((error) => {
-    writeResult({ ok: false, stderr: error instanceof Error ? error.message : String(error) });
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    writeResult({ ok: false, stderr: message });
     process.exitCode = 1;
   });
 }
@@ -188,11 +190,11 @@ async function handleCommand(request, db, dataDir, settings) {
 
 async function collectAndStoreSample(db, dataDir, settings, request) {
   const state = await readState(dataDir);
-  const cpuSnapshot = cpuCounters();
-  const networkCounters = settings.trackNetworkInterfaces ? collectNetworkCounters() : [];
-  const networkHealthCounters = settings.trackNetworkInterfaces ? collectNetworkHealthCounters() : {};
-  const diskIoCounters = settings.trackDiskIo ? collectDiskIoCounters() : [];
-  const memoryCounters = collectMemoryCounters();
+  const cpuSnapshot = collectMetric(cpuCountersFromOs(), cpuCounters);
+  const networkCounters = settings.trackNetworkInterfaces ? collectMetric([], collectNetworkCounters) : [];
+  const networkHealthCounters = settings.trackNetworkInterfaces ? collectMetric({}, collectNetworkHealthCounters) : {};
+  const diskIoCounters = settings.trackDiskIo ? collectMetric([], collectDiskIoCounters) : [];
+  const memoryCounters = collectMetric(memoryCountersFromOs(), collectMemoryCounters);
   const timestampMs = Date.now();
   const node = request.context?.runtime ?? {};
   const cpu = {
@@ -205,13 +207,13 @@ async function collectAndStoreSample(db, dataDir, settings, request) {
     perCore: cpuCoreUsage(state.cpuCores, cpuSnapshot.cores),
   };
   const memory = memorySample(state.memory, memoryCounters, state.lastSampleAtMs, timestampMs);
-  const disk = settings.trackDisks ? collectDisks(settings) : [];
+  const disk = settings.trackDisks ? collectMetric([], () => collectDisks(settings)) : [];
   const diskIo = diskIoSample(state.diskIo, diskIoCounters, state.lastSampleAtMs, timestampMs);
   const network = networkSample(state.network, networkCounters, state.lastSampleAtMs, timestampMs);
   const networkHealth = networkHealthSample(state.networkHealth, networkHealthCounters, state.lastSampleAtMs, timestampMs, network);
   const environment = {
-    thermal: settings.trackThermals ? collectThermals() : [],
-    battery: settings.trackBattery ? collectBattery() : null,
+    thermal: settings.trackThermals ? collectMetric([], collectThermals) : [],
+    battery: settings.trackBattery ? collectMetric(null, collectBattery) : null,
   };
   const sample = {
     timestamp: new Date(timestampMs).toISOString(),
@@ -586,36 +588,36 @@ function insertSample(db, sample) {
       sample.memory.swapUsedBytes,
       sample.memory.swapFreeBytes,
       sample.memory.swapTotalBytes,
-      sample.memory.pressure?.some?.avg10,
-      sample.memory.pressure?.some?.avg60,
-      sample.memory.pressure?.some?.avg300,
-      sample.memory.pressure?.full?.avg10,
-      sample.memory.pressure?.full?.avg60,
-      sample.memory.pressure?.full?.avg300,
+      numberOrNull(sample.memory.pressure?.some?.avg10),
+      numberOrNull(sample.memory.pressure?.some?.avg60),
+      numberOrNull(sample.memory.pressure?.some?.avg300),
+      numberOrNull(sample.memory.pressure?.full?.avg10),
+      numberOrNull(sample.memory.pressure?.full?.avg60),
+      numberOrNull(sample.memory.pressure?.full?.avg300),
       sample.memory.pageFaults,
       sample.memory.majorPageFaults,
       sample.memory.pageFaultsPerSec,
       sample.memory.majorPageFaultsPerSec,
-      sample.cpu.breakdown?.user,
-      sample.cpu.breakdown?.nice,
-      sample.cpu.breakdown?.system,
-      sample.cpu.breakdown?.idle,
-      sample.cpu.breakdown?.iowait,
-      sample.cpu.breakdown?.irq,
-      sample.cpu.breakdown?.steal,
+      numberOrNull(sample.cpu.breakdown?.user),
+      numberOrNull(sample.cpu.breakdown?.nice),
+      numberOrNull(sample.cpu.breakdown?.system),
+      numberOrNull(sample.cpu.breakdown?.idle),
+      numberOrNull(sample.cpu.breakdown?.iowait),
+      numberOrNull(sample.cpu.breakdown?.irq),
+      numberOrNull(sample.cpu.breakdown?.steal),
       networkTotals.rxBytesPerSec,
       networkTotals.txBytesPerSec,
       networkTotals.errors,
       networkTotals.drops,
-      sample.networkHealth?.tcpRetransmits,
-      sample.networkHealth?.tcpRetransmitsPerSec,
+      integerOrNull(sample.networkHealth?.tcpRetransmits),
+      numberOrNull(sample.networkHealth?.tcpRetransmitsPerSec),
       diskIoTotals.readBytesPerSec,
       diskIoTotals.writeBytesPerSec,
       diskIoTotals.readIops,
       diskIoTotals.writeIops,
       diskIoTotals.maxBusyPercent,
-      thermal.maxCelsius,
-      battery.percent,
+      numberOrNull(thermal.maxCelsius),
+      numberOrNull(battery.percent),
       battery.status || "",
       JSON.stringify(sample.alerts || []),
       Array.isArray(sample.alerts) ? sample.alerts.length : 0,
@@ -1339,6 +1341,10 @@ function collectMemoryCounters() {
       majorPageFaults: Number(vmstat.pgmajfault) || 0,
     };
   }
+  return memoryCountersFromOs();
+}
+
+function memoryCountersFromOs() {
   const total = totalmem();
   const free = freemem();
   return {
@@ -2462,6 +2468,14 @@ function requirePermission(request, permission) {
 
 function writeResult(result) {
   process.stdout.write(`${JSON.stringify(result)}\n`);
+}
+
+function collectMetric(fallback, collector) {
+  try {
+    return collector();
+  } catch {
+    return fallback;
+  }
 }
 
 function run(command, args) {

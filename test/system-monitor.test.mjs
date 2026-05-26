@@ -23,6 +23,22 @@ import {
   parseWindowsNetworkOutput,
 } from "../index.js";
 
+function assertPluginSucceeded(result) {
+  assert.equal(result.status, 0, result.stderr || result.stdout || result.error?.message);
+}
+
+function testSettings(settings = {}) {
+  return {
+    trackDisks: false,
+    trackDiskIo: false,
+    trackInodes: false,
+    trackNetworkInterfaces: false,
+    trackThermals: false,
+    trackBattery: false,
+    ...settings,
+  };
+}
+
 test("parses df -kP output and filters pseudo filesystems", () => {
   const disks = parseDf(`Filesystem 1024-blocks Used Available Capacity Mounted on
 /dev/sda1 1000 250 750 25% /
@@ -107,7 +123,7 @@ test("collects a sample through the NordRelay plugin request contract", async ()
     pluginId: "system-monitor",
     command: "sample",
     input: {},
-    settings: { trackDisks: false, trackNetworkInterfaces: false },
+    settings: testSettings(),
     dataDir,
     permissions: ["system.metrics.read"],
     context: { runtime: { nodeName: "test-node", platform: process.platform } },
@@ -117,7 +133,7 @@ test("collects a sample through the NordRelay plugin request contract", async ()
     input: JSON.stringify(payload),
     encoding: "utf8",
   });
-  assert.equal(result.status, 0, result.stderr);
+  assertPluginSucceeded(result);
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.ok, true);
   assert.equal(parsed.output.sample.node.name, "test-node");
@@ -134,7 +150,7 @@ test("returns chart-ready panel data from SQLite history", async () => {
     pluginId: "system-monitor",
     command: "sample",
     input: {},
-    settings: { trackDisks: false, trackNetworkInterfaces: false },
+    settings: testSettings(),
     dataDir,
     permissions: ["system.metrics.read"],
     context: { runtime: { nodeName: "test-node", platform: process.platform } },
@@ -145,14 +161,14 @@ test("returns chart-ready panel data from SQLite history", async () => {
       input: JSON.stringify(basePayload),
       encoding: "utf8",
     });
-    assert.equal(sampleResult.status, 0, sampleResult.stderr);
+    assertPluginSucceeded(sampleResult);
   }
   const panelResult = spawnSync(process.execPath, ["index.js"], {
     cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
     input: JSON.stringify({ ...basePayload, command: "panel-data", input: { range: "1h", maxPoints: 20 } }),
     encoding: "utf8",
   });
-  assert.equal(panelResult.status, 0, panelResult.stderr);
+  assertPluginSucceeded(panelResult);
   const parsed = JSON.parse(panelResult.stdout);
   assert.equal(parsed.ok, true);
   assert.equal(parsed.output.panelData.current.node.name, "test-node");
@@ -168,7 +184,7 @@ test("returns chart-ready panel data from SQLite history", async () => {
     input: JSON.stringify({ ...basePayload, command: "export", input: { format: "csv", range: "1h", maxPoints: 20 } }),
     encoding: "utf8",
   });
-  assert.equal(exportResult.status, 0, exportResult.stderr);
+  assertPluginSucceeded(exportResult);
   const exported = JSON.parse(exportResult.stdout);
   assert.equal(exported.ok, true);
   assert.equal(exported.output.format, "csv");
@@ -228,7 +244,7 @@ test("migrates an existing v1 SQLite database in place", async () => {
     pluginId: "system-monitor",
     command: "sample",
     input: {},
-    settings: { trackDisks: false, trackNetworkInterfaces: false, trackDiskIo: false },
+    settings: testSettings(),
     dataDir,
     permissions: ["system.metrics.read"],
     context: { runtime: { nodeName: "test-node", platform: process.platform } },
@@ -238,7 +254,7 @@ test("migrates an existing v1 SQLite database in place", async () => {
     input: JSON.stringify(payload),
     encoding: "utf8",
   });
-  assert.equal(result.status, 0, result.stderr);
+  assertPluginSucceeded(result);
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.ok, true);
   const migrated = new DatabaseSync(dbPath);
