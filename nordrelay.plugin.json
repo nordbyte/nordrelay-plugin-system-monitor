@@ -2,7 +2,7 @@
   "id": "system-monitor",
   "name": "System Monitor",
   "version": "0.1.0",
-  "description": "Collects local CPU, memory, disk, and network metrics and renders a peer dashboard.",
+  "description": "Collects CPU, memory, disk, disk I/O, network, pressure, thermal, battery, and history metrics and renders a peer dashboard.",
   "author": "Ricardo <github@nordbyte.de>",
   "homepage": "https://github.com/nordbyte/nordrelay-plugin-system-monitor",
   "repository": "https://github.com/nordbyte/nordrelay-plugin-system-monitor",
@@ -19,7 +19,7 @@
       {
         "id": "system.sample",
         "title": "Collect system metrics",
-        "description": "Samples CPU, memory, disk, and network usage on this node.",
+        "description": "Samples CPU, memory, disk, disk I/O, network, pressure, thermal, and battery metrics on this node.",
         "intervalMs": 5000,
         "runOnStart": true,
         "timeoutMs": 3000
@@ -113,6 +113,32 @@
         "timeoutMs": 5000
       },
       {
+        "name": "export",
+        "title": "Export metrics",
+        "description": "Export downsampled metrics history as JSON or CSV.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "format": {
+              "type": "string",
+              "title": "Format",
+              "default": "json"
+            },
+            "range": {
+              "type": "string",
+              "title": "Range",
+              "default": "24h"
+            },
+            "maxPoints": {
+              "type": "number",
+              "title": "Max points",
+              "default": 1000
+            }
+          }
+        },
+        "timeoutMs": 10000
+      },
+      {
         "name": "status",
         "title": "Collector status",
         "description": "Return local collector state.",
@@ -197,6 +223,76 @@
       "type": "boolean",
       "description": "Collect network byte counters and throughput.",
       "default": true
+    },
+    {
+      "key": "trackDiskIo",
+      "label": "Track disk I/O",
+      "type": "boolean",
+      "description": "Collect disk throughput, IOPS, busy percentage, queue depth, and latency where supported.",
+      "default": true
+    },
+    {
+      "key": "trackInodes",
+      "label": "Track inodes",
+      "type": "boolean",
+      "description": "Collect inode usage on Unix-like systems.",
+      "default": true
+    },
+    {
+      "key": "trackThermals",
+      "label": "Track thermals",
+      "type": "boolean",
+      "description": "Collect thermal sensor values where available.",
+      "default": true
+    },
+    {
+      "key": "trackBattery",
+      "label": "Track battery",
+      "type": "boolean",
+      "description": "Collect battery percentage and charging state where available.",
+      "default": true
+    },
+    {
+      "key": "thresholdCpuPercent",
+      "label": "CPU alert threshold",
+      "type": "number",
+      "description": "Show an alert when CPU usage reaches this percentage.",
+      "default": 90
+    },
+    {
+      "key": "thresholdMemoryPercent",
+      "label": "Memory alert threshold",
+      "type": "number",
+      "description": "Show an alert when real memory usage reaches this percentage.",
+      "default": 90
+    },
+    {
+      "key": "thresholdDiskPercent",
+      "label": "Disk alert threshold",
+      "type": "number",
+      "description": "Show an alert when disk or inode usage reaches this percentage.",
+      "default": 90
+    },
+    {
+      "key": "thresholdSwapPercent",
+      "label": "Swap alert threshold",
+      "type": "number",
+      "description": "Show an alert when swap usage reaches this percentage.",
+      "default": 75
+    },
+    {
+      "key": "thresholdIowaitPercent",
+      "label": "I/O wait alert threshold",
+      "type": "number",
+      "description": "Show an alert when CPU I/O wait reaches this percentage.",
+      "default": 25
+    },
+    {
+      "key": "thresholdDiskBusyPercent",
+      "label": "Disk busy alert threshold",
+      "type": "number",
+      "description": "Show an alert when a disk is busy above this percentage.",
+      "default": 85
     }
   ]
 }
