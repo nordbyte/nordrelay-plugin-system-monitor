@@ -65,3 +65,50 @@ test("collects a sample through the NordRelay plugin request contract", async ()
   assert.equal(parsed.output.sample.node.name, "test-node");
   assert.equal(typeof parsed.output.sample.memory.percent, "number");
 });
+
+test("renders the web panel with NordRelay shared plugin UI classes", async () => {
+  const payload = {
+    protocolVersion: 1,
+    type: "web-panel",
+    pluginId: "system-monitor",
+    panelId: "dashboard",
+    input: {
+      aggregate: {
+        results: [{
+          node: { name: "test-node", platform: "linux" },
+          ok: true,
+          result: {
+            output: {
+              sample: {
+                timestamp: "2026-05-26T08:00:00.000Z",
+                node: { name: "test-node", platform: "linux", hostname: "test" },
+                cpu: { percent: 12.5 },
+                memory: { percent: 34.5 },
+                disk: [{ mount: "/", percent: 56.5 }],
+                network: [{ rxBytesPerSec: 1024, txBytesPerSec: 2048 }],
+              },
+            },
+          },
+        }],
+      },
+    },
+    settings: {},
+    dataDir: "/tmp/nordrelay-system-monitor-test",
+    permissions: ["system.metrics.read"],
+    context: {},
+  };
+  const result = spawnSync(process.execPath, ["index.js"], {
+    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
+    input: JSON.stringify(payload),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, true);
+  assert.match(parsed.html, /class="stack"/);
+  assert.match(parsed.html, /class="metrics-grid"/);
+  assert.match(parsed.html, /class="panel"/);
+  assert.match(parsed.html, /class="progress"/);
+  assert.doesNotMatch(parsed.html, /<!doctype html>/i);
+  assert.doesNotMatch(parsed.html, /<style>/i);
+});

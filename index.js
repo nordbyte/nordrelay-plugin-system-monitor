@@ -317,56 +317,55 @@ function renderDashboardPanel(input = {}, context = {}) {
   const aggregate = input.aggregate && typeof input.aggregate === "object" ? input.aggregate : {};
   const results = Array.isArray(aggregate.results) ? aggregate.results : [];
   const nodes = results.length ? results : [{ node: context.runtime || { name: "Local node" }, ok: false, error: "No aggregate data available." }];
-  const cards = nodes.map(renderNodeCard).join("");
-  return `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-:root{color-scheme:light dark;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-body{margin:0;padding:16px;color:#d8dee9;background:#111827}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
-.card{border:1px solid rgba(255,255,255,.14);border-radius:8px;background:#172033;padding:14px}
-.card.failed{border-color:#ef4444}
-h1{font-size:18px;margin:0 0 14px}h2{font-size:15px;margin:0 0 8px}.muted{color:#9ca3af}.metric{display:grid;grid-template-columns:110px 1fr;gap:6px;font-size:13px;margin:4px 0}.bar{height:7px;background:#263244;border-radius:999px;overflow:hidden}.fill{height:100%;background:#22c55e}.warn .fill{background:#f59e0b}.bad .fill{background:#ef4444}small{display:block;color:#9ca3af;margin-top:8px}code{font-size:12px;color:#cbd5e1}
-</style>
-</head>
-<body>
-<h1>System Monitor <span class="muted">· ${escapeHtml(nodes.length)} node${nodes.length === 1 ? "" : "s"}</span></h1>
-<div class="grid">${cards}</div>
-</body>
-</html>`;
+  const panels = nodes.map(renderNodePanel).join("");
+  return `<div class="stack">
+    <div class="section-header">
+      <h1>System Monitor <small>· ${escapeHtml(nodes.length)} node${nodes.length === 1 ? "" : "s"}</small></h1>
+      <div class="row">${uiBadge(results.length ? "aggregate" : "local", results.length ? "enabled" : "warning")}</div>
+    </div>
+    <div class="metrics-grid">${panels}</div>
+  </div>`;
 }
 
-function renderNodeCard(item) {
+function renderNodePanel(item) {
   const node = item.node || {};
   if (!item.ok) {
-    return `<section class="card failed"><h2>${escapeHtml(node.name || node.id || "Node")}</h2><div class="muted">${escapeHtml(item.error || "Plugin unavailable")}</div></section>`;
+    return `<section class="panel">
+      <div class="section-header"><h2>${escapeHtml(node.name || node.id || "Node")}</h2>${uiBadge("failed", "failed")}</div>
+      <div class="error-state">${escapeHtml(item.error || "Plugin unavailable")}</div>
+    </section>`;
   }
   const sample = item.result?.output?.sample || item.result?.sample || item.output?.sample;
   if (!sample) {
-    return `<section class="card failed"><h2>${escapeHtml(node.name || node.id || "Node")}</h2><div class="muted">No metrics sample returned.</div></section>`;
+    return `<section class="panel">
+      <div class="section-header"><h2>${escapeHtml(node.name || node.id || "Node")}</h2>${uiBadge("missing", "warning")}</div>
+      <div class="empty-state">No metrics sample returned.</div>
+    </section>`;
   }
   const disk = Array.isArray(sample.disk) ? sample.disk.sort((a, b) => b.percent - a.percent)[0] : null;
   const network = Array.isArray(sample.network) ? sample.network.reduce((acc, row) => ({
     rxBytesPerSec: acc.rxBytesPerSec + (Number(row.rxBytesPerSec) || 0),
     txBytesPerSec: acc.txBytesPerSec + (Number(row.txBytesPerSec) || 0),
   }), { rxBytesPerSec: 0, txBytesPerSec: 0 }) : null;
-  return `<section class="card">
-    <h2>${escapeHtml(node.name || sample.node?.name || node.id || "Node")}</h2>
-    <div class="muted">${escapeHtml(sample.node?.platform || node.platform || "")} ${escapeHtml(sample.node?.hostname || "")}</div>
+  return `<section class="panel">
+    <div class="section-header">
+      <h2>${escapeHtml(node.name || sample.node?.name || node.id || "Node")}</h2>
+      ${uiBadge("ok", "enabled")}
+    </div>
+    <div class="callout muted">${escapeHtml([sample.node?.platform || node.platform || "", sample.node?.hostname || ""].filter(Boolean).join(" · "))}</div>
     ${metricRow("CPU", sample.cpu?.percent, "%")}
     ${metricRow("Memory", sample.memory?.percent, "%")}
     ${disk ? metricRow(`Disk ${disk.mount || ""}`, disk.percent, "%") : ""}
-    <div class="metric"><span>Network</span><span>${formatBytes(network?.rxBytesPerSec || 0)}/s down · ${formatBytes(network?.txBytesPerSec || 0)}/s up</span></div>
+    <div class="metric-row"><span>Network</span><span class="metric-kv-number">${formatBytes(network?.rxBytesPerSec || 0)}/s down · ${formatBytes(network?.txBytesPerSec || 0)}/s up</span></div>
     <small>${escapeHtml(sample.timestamp || "")}</small>
   </section>`;
 }
 
 function metricRow(label, value, suffix) {
   const number = Number(value) || 0;
-  const cls = number >= 90 ? "bad" : number >= 75 ? "warn" : "";
-  return `<div class="metric ${cls}"><span>${escapeHtml(label)}</span><span>${number.toFixed(1)}${suffix}<div class="bar"><div class="fill" style="width:${Math.max(0, Math.min(100, number))}%"></div></div></span></div>`;
+  const cls = number >= 90 ? "error" : number >= 75 ? "warn" : "";
+  const width = Math.max(0, Math.min(100, number));
+  return `<div class="metric-row"><span>${escapeHtml(label)}</span><span><span class="metric-kv-number">${number.toFixed(1)}${suffix}</span><div class="progress"><span class="progress-fill ${cls}" style="width:${width}%"></span></div></span></div>`;
 }
 
 function normalizeSettings(settings = {}) {
@@ -419,6 +418,10 @@ function formatBytes(value) {
   if (number < 1024 * 1024) return `${(number / 1024).toFixed(1).replace(/\.0$/, "")} KB`;
   if (number < 1024 * 1024 * 1024) return `${(number / 1024 / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
   return `${(number / 1024 / 1024 / 1024).toFixed(1).replace(/\.0$/, "")} GB`;
+}
+
+function uiBadge(text, status = "disabled") {
+  return `<span class="badge ${escapeHtml(status)}">${escapeHtml(text)}</span>`;
 }
 
 function escapeHtml(value) {
