@@ -50,7 +50,8 @@ system.metrics.read
 The dashboard aggregates data only from peers where this plugin is installed,
 enabled, and approved.
 
-The dashboard stores long-term history in SQLite and renders current values,
+The dashboard stores long-term history in SQLite and renders current CPU usage,
+CPU load averages, real memory in GB, local disk used/free space, network usage,
 range summaries, and downsampled charts per peer.
 
 ## Settings

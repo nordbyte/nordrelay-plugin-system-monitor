@@ -848,7 +848,7 @@ function renderNodePanel(item, range) {
       <div class="empty-state">No metrics sample returned.</div>
     </section>`;
   }
-  const disk = Array.isArray(sample.disk) ? sample.disk.sort((a, b) => b.percent - a.percent)[0] : null;
+  const disk = primaryDisk(sample.disk);
   const network = Array.isArray(sample.network) ? sample.network.reduce((acc, row) => ({
     rxBytesPerSec: acc.rxBytesPerSec + (Number(row.rxBytesPerSec) || 0),
     txBytesPerSec: acc.txBytesPerSec + (Number(row.txBytesPerSec) || 0),
@@ -867,8 +867,9 @@ function renderNodePanel(item, range) {
     </div>
     <div class="metrics-grid">
       ${metricCard("CPU", `${formatNumber(sample.cpu?.percent)}%`, progressBar(sample.cpu?.percent))}
-      ${metricCard("Memory", `${formatNumber(sample.memory?.percent)}%`, progressBar(sample.memory?.percent))}
-      ${metricCard("Disk", disk ? `${formatNumber(disk.percent)}%` : "-", disk ? `${progressBar(disk.percent)}<small>${escapeHtml(disk.mount || "")}</small>` : "")}
+      ${metricCard("CPU load", formatLoadAverage(sample.cpu), "<small>1m / 5m / 15m</small>")}
+      ${metricCard("Real memory", formatMemoryMain(sample.memory), `${progressBar(sample.memory?.percent)}<small>${escapeHtml(formatMemoryDetail(sample.memory))}</small>`)}
+      ${metricCard("Local disk", disk ? formatDiskMain(disk) : "-", disk ? `${progressBar(disk.percent)}<small>${escapeHtml(formatDiskDetail(disk))}</small>` : "")}
       ${metricCard("Network", `${formatBytes(network?.rxBytesPerSec || 0)}/s down`, `<small>${formatBytes(network?.txBytesPerSec || 0)}/s up</small>`)}
     </div>
     <div class="stack">
@@ -885,13 +886,28 @@ function renderNodePanel(item, range) {
         <tbody>
           <tr><td>Samples</td><td>${escapeHtml(summary.samples ?? 0)}</td><td>${escapeHtml(formatTimeRange(history.fromMs, history.toMs))}</td></tr>
           <tr><td>CPU range</td><td>${escapeHtml(formatNumber(summary.cpu?.min))}% - ${escapeHtml(formatNumber(summary.cpu?.max))}%</td><td>avg ${escapeHtml(formatNumber(summary.cpu?.avg))}%</td></tr>
+          <tr><td>CPU load average</td><td>${escapeHtml(formatLoadAverage(sample.cpu))}</td><td>1m / 5m / 15m</td></tr>
           <tr><td>Memory range</td><td>${escapeHtml(formatNumber(summary.memory?.min))}% - ${escapeHtml(formatNumber(summary.memory?.max))}%</td><td>avg ${escapeHtml(formatNumber(summary.memory?.avg))}%</td></tr>
+          <tr><td>Real memory</td><td>${escapeHtml(formatMemoryMain(sample.memory))}</td><td>${escapeHtml(formatMemoryDetail(sample.memory))}</td></tr>
+          <tr><td>Local disk</td><td>${escapeHtml(disk ? formatDiskMain(disk) : "-")}</td><td>${escapeHtml(disk ? formatDiskDetail(disk) : "No disk data collected")}</td></tr>
           <tr><td>Storage</td><td>${escapeHtml(formatBytes(storage.sizeBytes || 0))}</td><td>${escapeHtml(storage.samples || 0)} samples retained ${escapeHtml(storage.retentionDays || "")}d</td></tr>
         </tbody>
       </table>
     </div>
     <small>Last sample ${escapeHtml(sample.timestamp || "")}</small>
   </section>`;
+}
+
+function primaryDisk(disks) {
+  if (!Array.isArray(disks) || !disks.length) return null;
+  const usable = disks.filter((disk) => Number(disk?.totalBytes) > 0);
+  if (!usable.length) return null;
+  const preferred = usable.find((disk) => disk.mount === "/")
+    || usable.find((disk) => /^[A-Z]:\\?$/i.test(String(disk.mount || "")))
+    || usable.find((disk) => String(disk.mount || "").toLowerCase() === "/system/volumes/data")
+    || usable.find((disk) => String(disk.mount || "").toLowerCase() === "/users")
+    || null;
+  return preferred || [...usable].sort((a, b) => (Number(b.totalBytes) || 0) - (Number(a.totalBytes) || 0))[0];
 }
 
 function renderDiskCharts(disks) {
@@ -1072,6 +1088,37 @@ function formatBytes(value) {
   if (number < 1024 * 1024) return `${(number / 1024).toFixed(1).replace(/\.0$/, "")} KB`;
   if (number < 1024 * 1024 * 1024) return `${(number / 1024 / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
   return `${(number / 1024 / 1024 / 1024).toFixed(1).replace(/\.0$/, "")} GB`;
+}
+
+function formatGigabytes(value) {
+  return `${(Math.max(0, Number(value) || 0) / 1024 / 1024 / 1024).toFixed(1).replace(/\.0$/, "")} GB`;
+}
+
+function formatLoadAverage(cpu = {}) {
+  return [cpu.load1, cpu.load5, cpu.load15].map((value) => formatLoadNumber(value)).join(" / ");
+}
+
+function formatLoadNumber(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "0.00";
+  return parsed.toFixed(2);
+}
+
+function formatMemoryMain(memory = {}) {
+  return `${formatGigabytes(memory.usedBytes)} used`;
+}
+
+function formatMemoryDetail(memory = {}) {
+  return `${formatGigabytes(memory.freeBytes)} free / ${formatGigabytes(memory.totalBytes)} total`;
+}
+
+function formatDiskMain(disk = {}) {
+  return `${formatGigabytes(disk.usedBytes)} used`;
+}
+
+function formatDiskDetail(disk = {}) {
+  const mount = disk.mount ? `${disk.mount} - ` : "";
+  return `${mount}${formatGigabytes(disk.availableBytes)} free / ${formatGigabytes(disk.totalBytes)} total`;
 }
 
 function formatTimeRange(fromMs, toMs) {

@@ -121,9 +121,9 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
                   timestamp: "2026-05-26T08:00:00.000Z",
                   timestampMs: Date.parse("2026-05-26T08:00:00.000Z"),
                   node: { name: "test-node", platform: "linux", hostname: "test" },
-                  cpu: { percent: 12.5 },
-                  memory: { percent: 34.5 },
-                  disk: [{ mount: "/", percent: 56.5 }],
+                  cpu: { percent: 12.5, load1: 0.12, load5: 0.34, load15: 0.56 },
+                  memory: { percent: 50, usedBytes: 8 * 1024 ** 3, freeBytes: 8 * 1024 ** 3, totalBytes: 16 * 1024 ** 3 },
+                  disk: [{ mount: "/", percent: 60, usedBytes: 120 * 1024 ** 3, availableBytes: 80 * 1024 ** 3, totalBytes: 200 * 1024 ** 3 }],
                   network: [{ rxBytesPerSec: 1024, txBytesPerSec: 2048 }],
                 },
                 history: {
@@ -171,6 +171,12 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /class="chart-hit"/);
   assert.match(parsed.html, /Hover the chart for exact values/);
   assert.match(parsed.html, /CPU: 10%/);
+  assert.match(parsed.html, /CPU load/);
+  assert.match(parsed.html, /0\.12 \/ 0\.34 \/ 0\.56/);
+  assert.match(parsed.html, /Real memory/);
+  assert.match(parsed.html, /8 GB free \/ 16 GB total/);
+  assert.match(parsed.html, /Local disk/);
+  assert.match(parsed.html, /80 GB free \/ 200 GB total/);
   assert.match(parsed.html, /NordRelayPanel\.reload/);
   assert.doesNotMatch(parsed.html, /<!doctype html>/i);
   assert.doesNotMatch(parsed.html, /<style>/i);
