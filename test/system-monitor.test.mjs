@@ -168,6 +168,9 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /class="panel"/);
   assert.match(parsed.html, /class="progress"/);
   assert.match(parsed.html, /<svg role="img"/);
+  assert.match(parsed.html, /class="chart-hit"/);
+  assert.match(parsed.html, /Hover the chart for exact values/);
+  assert.match(parsed.html, /CPU: 10%/);
   assert.match(parsed.html, /NordRelayPanel\.reload/);
   assert.doesNotMatch(parsed.html, /<!doctype html>/i);
   assert.doesNotMatch(parsed.html, /<style>/i);

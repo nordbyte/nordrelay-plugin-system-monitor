@@ -906,7 +906,7 @@ function renderNetworkCharts(network) {
   return network.slice(0, 2).map((item) => renderLineChart(`Network ${item.name || ""}`, item.points || [], [
     { key: "rxBytesPerSec", label: "Down", color: "#1d8a5b" },
     { key: "txBytesPerSec", label: "Up", color: "#235c42" },
-  ], "B/s", formatBytes)).join("");
+  ], "B/s", (value) => `${formatBytes(value)}/s`)).join("");
 }
 
 function renderLineChart(title, points, series, unit = "", formatter = (value) => `${formatNumber(value)}${unit}`) {
@@ -928,6 +928,14 @@ function renderLineChart(title, points, series, unit = "", formatter = (value) =
     const d = rows.map((point, index) => `${index === 0 ? "M" : "L"}${x(point.timestamp).toFixed(1)},${y(point[line.key]).toFixed(1)}`).join(" ");
     return `<path d="${escapeHtml(d)}" fill="none" stroke="${escapeHtml(line.color)}" stroke-width="2.2" vector-effect="non-scaling-stroke"><title>${escapeHtml(line.label)}</title></path>`;
   }).join("");
+  const hitAreas = rows.map((point, index) => {
+    const currentX = x(point.timestamp);
+    const previousX = index > 0 ? x(rows[index - 1].timestamp) : pad.left;
+    const nextX = index < rows.length - 1 ? x(rows[index + 1].timestamp) : width - pad.right;
+    const left = index > 0 ? (previousX + currentX) / 2 : pad.left;
+    const right = index < rows.length - 1 ? (currentX + nextX) / 2 : width - pad.right;
+    return `<rect class="chart-hit" x="${left.toFixed(1)}" y="${pad.top}" width="${Math.max(2, right - left).toFixed(1)}" height="${height - pad.top - pad.bottom}" fill="transparent" pointer-events="all"><title>${escapeHtml(chartTooltip(point, series, formatter))}</title></rect>`;
+  }).join("");
   const legend = series.map((line) => `<span class="chip"><span style="display:inline-block;width:9px;height:9px;border-radius:999px;background:${escapeHtml(line.color)}"></span>${escapeHtml(line.label)}</span>`).join("");
   const latest = rows.at(-1) || {};
   const latestText = series.map((line) => `${line.label}: ${formatter(Number(latest[line.key]) || 0)}`).join(" | ");
@@ -940,9 +948,19 @@ function renderLineChart(title, points, series, unit = "", formatter = (value) =
       <text x="4" y="${pad.top + 4}" fill="currentColor" opacity="0.55" font-size="11">${escapeHtml(formatter(maxValue))}</text>
       <text x="4" y="${height - pad.bottom}" fill="currentColor" opacity="0.55" font-size="11">0</text>
       ${paths}
+      ${hitAreas}
     </svg>
     <div class="row">${legend}</div>
+    <small class="chart-tooltip-note">Hover the chart for exact values.</small>
   </div>`;
+}
+
+function chartTooltip(point, series, formatter) {
+  const lines = [new Date(Number(point.timestamp)).toLocaleString()];
+  for (const line of series) {
+    lines.push(`${line.label}: ${formatter(Number(point[line.key]) || 0)}`);
+  }
+  return lines.join("\n");
 }
 
 function metricCard(label, value, body = "") {
