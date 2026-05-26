@@ -41,17 +41,75 @@
       {
         "name": "history",
         "title": "Metrics history",
-        "description": "Return recent metrics samples.",
+        "description": "Return downsampled metrics history for charts.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "limit": {
+            "range": {
+              "type": "string",
+              "title": "Range",
+              "default": "1h"
+            },
+            "maxPoints": {
               "type": "number",
-              "title": "Limit",
-              "default": 120
+              "title": "Max chart points",
+              "default": 240
             }
           }
         },
+        "timeoutMs": 5000
+      },
+      {
+        "name": "panel-data",
+        "title": "Panel data",
+        "description": "Return current metrics, summaries, storage status, and chart-ready history.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "range": {
+              "type": "string",
+              "title": "Range",
+              "default": "1h"
+            },
+            "maxPoints": {
+              "type": "number",
+              "title": "Max chart points",
+              "default": 240
+            }
+          }
+        },
+        "timeoutMs": 10000
+      },
+      {
+        "name": "series",
+        "title": "Metric series",
+        "description": "Return one downsampled metric series for automation or external dashboards.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "metric": {
+              "type": "string",
+              "title": "Metric",
+              "default": "cpu"
+            },
+            "range": {
+              "type": "string",
+              "title": "Range",
+              "default": "1h"
+            },
+            "maxPoints": {
+              "type": "number",
+              "title": "Max chart points",
+              "default": 240
+            }
+          }
+        },
+        "timeoutMs": 5000
+      },
+      {
+        "name": "summary",
+        "title": "Metric summary",
+        "description": "Return min, average, and max summaries for a time range.",
         "timeoutMs": 5000
       },
       {
@@ -61,10 +119,22 @@
         "timeoutMs": 3000
       },
       {
+        "name": "storage",
+        "title": "Storage status",
+        "description": "Return SQLite storage size, sample counts, and retention information.",
+        "timeoutMs": 3000
+      },
+      {
         "name": "cleanup",
         "title": "Cleanup history",
         "description": "Remove samples older than the configured retention.",
         "timeoutMs": 5000
+      },
+      {
+        "name": "vacuum",
+        "title": "Vacuum storage",
+        "description": "Run SQLite VACUUM after cleanup or large retention changes.",
+        "timeoutMs": 10000
       }
     ],
     "webPanels": [
@@ -72,8 +142,8 @@
         "id": "dashboard",
         "title": "System Monitor",
         "placement": "monitor",
-        "aggregateCommand": "latest",
-        "timeoutMs": 5000
+        "aggregateCommand": "panel-data",
+        "timeoutMs": 10000
       }
     ],
     "diagnostics": true
@@ -87,11 +157,32 @@
       "default": 5000
     },
     {
-      "key": "retentionHours",
-      "label": "Retention hours",
+      "key": "retentionDays",
+      "label": "Retention days",
       "type": "number",
-      "description": "How long metrics history is kept in the plugin data directory.",
-      "default": 72
+      "description": "How many days of SQLite metrics history are kept in the plugin data directory.",
+      "default": 30
+    },
+    {
+      "key": "maxChartPoints",
+      "label": "Max chart points",
+      "type": "number",
+      "description": "Maximum downsampled points returned for each chart series.",
+      "default": 240
+    },
+    {
+      "key": "cleanupIntervalMinutes",
+      "label": "Cleanup interval",
+      "type": "number",
+      "description": "Minimum minutes between automatic retention cleanup runs.",
+      "default": 30
+    },
+    {
+      "key": "autoRefreshMs",
+      "label": "Panel auto refresh",
+      "type": "number",
+      "description": "Default auto-refresh interval used by the WebUI panel.",
+      "default": 10000
     },
     {
       "key": "trackDisks",
