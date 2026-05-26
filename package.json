@@ -1,0 +1,37 @@
+{
+  "name": "@nordbyte/nordrelay-plugin-system-monitor",
+  "version": "0.1.0",
+  "description": "System metrics collector and dashboard plugin for NordRelay peers.",
+  "type": "module",
+  "homepage": "https://github.com/nordbyte/nordrelay-plugin-system-monitor#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nordbyte/nordrelay-plugin-system-monitor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nordbyte/nordrelay-plugin-system-monitor/issues"
+  },
+  "main": "./index.js",
+  "files": [
+    "index.js",
+    "nordrelay.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node --check index.js",
+    "test": "node --test test/*.test.mjs",
+    "prepack": "npm run check && npm test"
+  },
+  "keywords": [
+    "nordrelay",
+    "plugin",
+    "monitoring",
+    "system-metrics"
+  ],
+  "author": "Ricardo <github@nordbyte.de>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "id": "system-monitor",
+  "name": "System Monitor",
+  "version": "0.1.0",
+  "description": "Collects local CPU, memory, disk, and network metrics and renders a peer dashboard.",
+  "author": "Ricardo <github@nordbyte.de>",
+  "homepage": "https://github.com/nordbyte/nordrelay-plugin-system-monitor",
+  "repository": "https://github.com/nordbyte/nordrelay-plugin-system-monitor",
+  "license": "MIT",
+  "nordrelay": ">=0.9.8",
+  "entry": "index.js",
+  "permissions": [
+    "runtime.read",
+    "peers.read",
+    "system.metrics.read"
+  ],
+  "capabilities": {
+    "collectors": [
+      {
+        "id": "system.sample",
+        "title": "Collect system metrics",
+        "description": "Samples CPU, memory, disk, and network usage on this node.",
+        "intervalMs": 5000,
+        "runOnStart": true,
+        "timeoutMs": 3000
+      }
+    ],
+    "commands": [
+      {
+        "name": "sample",
+        "title": "Collect sample",
+        "description": "Collect and persist one metrics sample.",
+        "timeoutMs": 5000
+      },
+      {
+        "name": "latest",
+        "title": "Latest metrics",
+        "description": "Return the latest sample, collecting one if needed.",
+        "timeoutMs": 5000
+      },
+      {
+        "name": "history",
+        "title": "Metrics history",
+        "description": "Return recent metrics samples.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "number",
+              "title": "Limit",
+              "default": 120
+            }
+          }
+        },
+        "timeoutMs": 5000
+      },
+      {
+        "name": "status",
+        "title": "Collector status",
+        "description": "Return local collector state.",
+        "timeoutMs": 3000
+      },
+      {
+        "name": "cleanup",
+        "title": "Cleanup history",
+        "description": "Remove samples older than the configured retention.",
+        "timeoutMs": 5000
+      }
+    ],
+    "webPanels": [
+      {
+        "id": "dashboard",
+        "title": "System Monitor",
+        "placement": "monitor",
+        "aggregateCommand": "latest",
+        "timeoutMs": 5000
+      }
+    ],
+    "diagnostics": true
+  },
+  "settings": [
+    {
+      "key": "sampleIntervalMs",
+      "label": "Sample interval",
+      "type": "number",
+      "description": "Preferred sample interval in milliseconds. The host scheduler may clamp very small values.",
+      "default": 5000
+    },
+    {
+      "key": "retentionHours",
+      "label": "Retention hours",
+      "type": "number",
+      "description": "How long metrics history is kept in the plugin data directory.",
+      "default": 72
+    },
+    {
+      "key": "trackDisks",
+      "label": "Track disks",
+      "type": "boolean",
+      "description": "Collect disk usage from mounted filesystems or drives.",
+      "default": true
+    },
+    {
+      "key": "trackNetworkInterfaces",
+      "label": "Track network interfaces",
+      "type": "boolean",
+      "description": "Collect network byte counters and throughput.",
+      "default": true
+    }
+  ]
+}
