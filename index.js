@@ -2381,7 +2381,8 @@ function progressBar(value) {
   const number = Number(value) || 0;
   const cls = number >= 90 ? "error" : number >= 75 ? "warn" : "";
   const width = Math.max(0, Math.min(100, number));
-  return `<div class="progress"><span class="progress-fill ${cls}" style="width:${width}%"></span></div>`;
+  const color = cls === "error" ? "var(--danger)" : cls === "warn" ? "var(--warn-text)" : "var(--success)";
+  return `<div class="progress" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${width}" style="height:7px;width:100%;background:color-mix(in srgb,var(--border) 50%,transparent);border-radius:999px;overflow:hidden"><span class="progress-fill ${cls}" style="display:block;height:100%;width:${width}%;max-width:${width}%;min-width:0;background:${color}"></span></div>`;
 }
 
 function panelScript() {
