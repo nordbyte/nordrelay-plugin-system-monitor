@@ -24,6 +24,12 @@ nordrelay plugin install /path/to/nordrelay-plugin-system-monitor --enable --app
 The plugin has no npm runtime dependencies. It uses the `node:sqlite` runtime
 module available in supported NordRelay Node.js versions.
 
+The npm package is published as:
+
+```text
+@nordbyte/nordrelay-system-monitor
+```
+
 In the WebUI, open **Plugins**, select the target node in the header, and install
 the GitHub source. Use **Install on all enabled peers** to install the same
 plugin on all reachable peers without logging into each peer separately.

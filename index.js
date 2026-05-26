@@ -4,6 +4,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DB_FILE = "metrics.sqlite";
 const STATE_FILE = "state.json";
@@ -20,11 +21,15 @@ const RANGE_PRESETS = {
 
 let DatabaseSyncClass;
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectCliEntry()) {
   runPlugin().catch((error) => {
     writeResult({ ok: false, stderr: error instanceof Error ? error.message : String(error) });
     process.exitCode = 1;
   });
+}
+
+function isDirectCliEntry() {
+  return Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 }
 
 export async function runPlugin() {

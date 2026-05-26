@@ -1,5 +1,5 @@
 {
-  "name": "@nordbyte/nordrelay-plugin-system-monitor",
+  "name": "@nordbyte/nordrelay-system-monitor",
   "version": "0.1.0",
   "description": "System metrics collector and dashboard plugin for NordRelay peers.",
   "type": "module",
