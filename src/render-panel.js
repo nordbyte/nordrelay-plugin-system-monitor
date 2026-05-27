@@ -31,6 +31,7 @@ const RANGE_PRESETS = {
   '7d': 7 * 24 * 60 * 60 * 1000,
   '30d': 30 * 24 * 60 * 60 * 1000,
 };
+const CHART_POINT_LIMIT = 120;
 
 function diskIoSummary(rows = []) {
   return (Array.isArray(rows) ? rows : []).reduce((acc, row) => {
@@ -397,7 +398,7 @@ function renderLineChart(title, points, series, unit = "", formatter = (value) =
   const width = 760;
   const height = 180;
   const pad = { left: 42, right: 14, top: 24, bottom: 28 };
-  const rows = Array.isArray(points) ? points.filter((point) => Number.isFinite(Number(point.timestamp))) : [];
+  const rows = downsampleRows(Array.isArray(points) ? points.filter((point) => Number.isFinite(Number(point.timestamp))) : [], CHART_POINT_LIMIT);
   if (!rows.length) {
     return `<div class="panel"><h3>${escapeHtml(title)}</h3><div class="empty-state">No history for this range.</div></div>`;
   }
@@ -412,21 +413,17 @@ function renderLineChart(title, points, series, unit = "", formatter = (value) =
     const d = rows.map((point, index) => `${index === 0 ? "M" : "L"}${x(point.timestamp).toFixed(1)},${y(point[line.key]).toFixed(1)}`).join(" ");
     return `<path d="${escapeHtml(d)}" fill="none" stroke="${escapeHtml(line.color)}" stroke-width="2.2" vector-effect="non-scaling-stroke"><title>${escapeHtml(line.label)}</title></path>`;
   }).join("");
-  const hitAreas = rows.map((point, index) => {
-    const currentX = x(point.timestamp);
-    const previousX = index > 0 ? x(rows[index - 1].timestamp) : pad.left;
-    const nextX = index < rows.length - 1 ? x(rows[index + 1].timestamp) : width - pad.right;
-    const left = index > 0 ? (previousX + currentX) / 2 : pad.left;
-    const right = index < rows.length - 1 ? (currentX + nextX) / 2 : width - pad.right;
-    const tooltip = chartTooltip(point, series, formatter);
-    return `<rect class="chart-hit" tabindex="0" role="img" aria-label="${escapeHtml(tooltip)}" data-chart-tooltip="${escapeHtml(tooltip).replace(/\n/g, "&#10;")}" x="${left.toFixed(1)}" y="${pad.top}" width="${Math.max(2, right - left).toFixed(1)}" height="${height - pad.top - pad.bottom}" fill="transparent" pointer-events="all"><title>${escapeHtml(tooltip)}</title></rect>`;
-  }).join("");
+  const chartPoints = rows.map((point) => ({
+    x: Number(x(point.timestamp).toFixed(1)),
+    tooltip: chartTooltip(point, series, formatter),
+  }));
+  const chartPointsJson = escapeHtml(JSON.stringify(chartPoints));
   const legend = series.map((line) => `<span class="chip chart-legend-item"><svg class="chart-legend-dot" aria-hidden="true" viewBox="0 0 9 9" width="9" height="9"><circle cx="4.5" cy="4.5" r="4.5" fill="${escapeHtml(line.color)}"></circle></svg>${escapeHtml(line.label)}</span>`).join("");
   const latest = rows.at(-1) || {};
   const latestText = series.map((line) => `${line.label}: ${formatter(Number(latest[line.key]) || 0)}`).join(" | ");
   return `<div class="panel">
     <div class="section-header"><h3>${escapeHtml(title)}</h3><small>${escapeHtml(latestText)}</small></div>
-    <div class="chart-wrap" data-chart-wrap>
+    <div class="chart-wrap" data-chart-wrap data-chart-points="${chartPointsJson}">
       <span class="chart-axis-label chart-axis-label-top">${escapeHtml(formatter(maxValue))}</span>
       <span class="chart-axis-label chart-axis-label-bottom">0</span>
       <svg role="img" aria-label="${escapeHtml(title)} chart" viewBox="0 0 ${width} ${height}" width="100%" height="180" preserveAspectRatio="none">
@@ -434,13 +431,27 @@ function renderLineChart(title, points, series, unit = "", formatter = (value) =
         <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="currentColor" opacity="0.18"></line>
         <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="currentColor" opacity="0.18"></line>
         ${paths}
-        ${hitAreas}
+        <rect class="chart-pointer-layer" tabindex="0" role="img" aria-label="${escapeHtml(title)} values" data-chart-hit-area x="${pad.left}" y="${pad.top}" width="${width - pad.left - pad.right}" height="${height - pad.top - pad.bottom}" fill="transparent" pointer-events="all"></rect>
       </svg>
       <div class="chart-tooltip" data-chart-tooltip-popup hidden></div>
     </div>
     <div class="row chart-legend">${legend}</div>
     <small class="chart-tooltip-note">Hover the chart for exact values.</small>
   </div>`;
+}
+
+function downsampleRows(rows, limit) {
+  if (!Array.isArray(rows) || rows.length <= limit) return rows;
+  const result = [];
+  const maxIndex = rows.length - 1;
+  const seen = new Set();
+  for (let index = 0; index < limit; index += 1) {
+    const sourceIndex = Math.round((index / Math.max(1, limit - 1)) * maxIndex);
+    if (seen.has(sourceIndex)) continue;
+    seen.add(sourceIndex);
+    result.push(rows[sourceIndex]);
+  }
+  return result;
 }
 
 function chartTooltip(point, series, formatter) {
@@ -542,12 +553,41 @@ export function dashboardPanelScript() {
     var chart=target.closest('[data-chart-wrap]');
     return chart?chart.querySelector('[data-chart-tooltip-popup]'):null;
   }
-  function positionTooltip(target,event){
+  function chartPointsFor(target){
+    var chart=target.closest('[data-chart-wrap]');
+    if(!chart)return [];
+    try{
+      var points=JSON.parse(chart.dataset.chartPoints||'[]');
+      return Array.isArray(points)?points:[];
+    }catch{return [];}
+  }
+  function nearestChartPoint(target,event){
+    var points=chartPointsFor(target);
+    if(!points.length)return null;
+    if(!event||!Number.isFinite(event.clientX))return points[points.length-1];
+    var chart=target.closest('[data-chart-wrap]');
+    var svg=target.ownerSVGElement||target.closest('svg');
+    if(!chart||!svg)return points[points.length-1];
+    var rect=chart.getBoundingClientRect();
+    var viewBox=svg.viewBox&&svg.viewBox.baseVal?svg.viewBox.baseVal:null;
+    var chartX=event.clientX-rect.left;
+    var svgX=viewBox&&rect.width?chartX*(viewBox.width/rect.width):chartX;
+    var nearest=points[0];
+    var distance=Math.abs(Number(nearest.x)||0-svgX);
+    points.forEach(function(point){
+      var nextDistance=Math.abs((Number(point.x)||0)-svgX);
+      if(nextDistance<distance){nearest=point;distance=nextDistance;}
+    });
+    return nearest;
+  }
+  function positionTooltip(target,event,point){
     var tooltip=tooltipFor(target);
     var chart=target.closest('[data-chart-wrap]');
     if(!tooltip||!chart)return;
     var rect=chart.getBoundingClientRect();
-    var x=event&&Number.isFinite(event.clientX)?event.clientX-rect.left:Number(target.getAttribute('x')||0);
+    var svg=target.ownerSVGElement||target.closest('svg');
+    var viewBox=svg&&svg.viewBox&&svg.viewBox.baseVal?svg.viewBox.baseVal:null;
+    var x=event&&Number.isFinite(event.clientX)?event.clientX-rect.left:(point&&viewBox&&viewBox.width?Number(point.x||0)*(rect.width/viewBox.width):Number(target.getAttribute('x')||0));
     var y=event&&Number.isFinite(event.clientY)?event.clientY-rect.top:Number(target.getAttribute('y')||0);
     var tooltipWidth=Math.min(280,tooltip.offsetWidth||220);
     var left=Math.max(8,Math.min(Math.max(8,rect.width-tooltipWidth-8),x+12));
@@ -558,11 +598,11 @@ export function dashboardPanelScript() {
   }
   function showTooltip(target,event){
     var tooltip=tooltipFor(target);
-    var value=target.getAttribute('data-chart-tooltip');
-    if(!tooltip||!value)return;
-    tooltip.textContent=value;
+    var point=nearestChartPoint(target,event);
+    if(!tooltip||!point||!point.tooltip)return;
+    tooltip.textContent=String(point.tooltip);
     tooltip.hidden=false;
-    positionTooltip(target,event);
+    positionTooltip(target,event,point);
   }
   function hideTooltip(target){
     var tooltip=tooltipFor(target);
@@ -571,9 +611,9 @@ export function dashboardPanelScript() {
   function hideChartTooltips(){
     root.querySelectorAll('[data-chart-tooltip-popup]').forEach(function(tooltip){tooltip.hidden=true;});
   }
-  root.querySelectorAll('.chart-hit').forEach(function(hit){
+  root.querySelectorAll('[data-chart-hit-area]').forEach(function(hit){
     hit.addEventListener('pointerenter',function(event){showTooltip(hit,event);});
-    hit.addEventListener('pointermove',function(event){positionTooltip(hit,event);});
+    hit.addEventListener('pointermove',function(event){showTooltip(hit,event);});
     hit.addEventListener('pointerleave',function(){hideTooltip(hit);});
     hit.addEventListener('focus',function(){showTooltip(hit);});
     hit.addEventListener('blur',function(){hideTooltip(hit);});

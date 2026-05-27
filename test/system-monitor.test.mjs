@@ -512,8 +512,8 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /Collector diagnostics/);
   assert.match(parsed.html, /Alert history/);
   assert.match(parsed.html, /<svg role="img"/);
-  assert.match(parsed.html, /class="chart-hit"/);
-  assert.match(parsed.html, /data-chart-tooltip=/);
+  assert.match(parsed.html, /data-chart-points=/);
+  assert.match(parsed.html, /data-chart-hit-area/);
   assert.match(parsed.html, /data-chart-tooltip-popup/);
   assert.match(parsed.html, /class="chart-axis-label/);
   assert.match(parsed.html, /class="row chart-legend"/);
@@ -532,6 +532,7 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /Pressure/);
   assert.match(parsed.html, /Swap/);
   assert.match(parsed.panel.script, /panelReload/);
+  assert.match(parsed.panel.script, /data-chart-hit-area/);
   assert.doesNotMatch(parsed.html, /<script>/i);
   assert.doesNotMatch(parsed.html, /<!doctype html>/i);
   assert.doesNotMatch(parsed.html, /<style>/i);

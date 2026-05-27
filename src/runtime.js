@@ -96,7 +96,7 @@ export async function runPlugin() {
 
   if (request.type === "web-panel") {
     const html = renderDashboardPanel(request.input, request.context, settings);
-    writeResult({ ok: true, html, panel: { html, script: dashboardPanelScript() } });
+    writeResult({ ok: true, html, panel: { script: dashboardPanelScript() } });
     return;
   }
 
