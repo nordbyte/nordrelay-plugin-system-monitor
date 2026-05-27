@@ -298,9 +298,11 @@ function renderNodePanel(item, range, selected = true) {
         { key: "cpuIowaitPercent", label: "I/O wait", color: "#f2994a", max: 100 },
         { key: "cpuStealPercent", label: "Steal", color: "#9b51e0", max: 100 },
       ], "%")}
-      ${renderLineChart("Total disk and network throughput - " + range, history.points || [], [
+      ${renderLineChart("Total disk throughput - " + range, history.points || [], [
         { key: "diskReadBytesPerSec", label: "Disk read", color: "#1d8a5b" },
         { key: "diskWriteBytesPerSec", label: "Disk write", color: "#235c42" },
+      ], "B/s", (value) => `${formatBytes(value)}/s`)}
+      ${renderLineChart("Total network throughput - " + range, history.points || [], [
         { key: "rxBytesPerSec", label: "Net down", color: "#2f80ed" },
         { key: "txBytesPerSec", label: "Net up", color: "#56ccf2" },
       ], "B/s", (value) => `${formatBytes(value)}/s`)}

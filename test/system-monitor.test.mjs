@@ -537,6 +537,13 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /Swap used/);
   assert.match(parsed.html, /Swap available/);
   assert.doesNotMatch(parsed.html, /CPU and memory/);
+  assert.match(parsed.html, /Total disk throughput - 90m/);
+  assert.match(parsed.html, /Disk read/);
+  assert.match(parsed.html, /Disk write/);
+  assert.match(parsed.html, /Total network throughput - 90m/);
+  assert.match(parsed.html, /Net down/);
+  assert.match(parsed.html, /Net up/);
+  assert.doesNotMatch(parsed.html, /Total disk and network throughput/);
   assert.match(parsed.html, /CPU: 10%/);
   assert.match(parsed.html, /CPU load/);
   assert.match(parsed.html, /0\.12 \/ 0\.34 \/ 0\.56/);
