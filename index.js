@@ -2131,7 +2131,7 @@ function renderComparisonTable(nodes) {
   return `<section class="panel">
     <div class="section-header"><h2>Node comparison</h2><small>Sorted by current stress.</small></div>
     <div class="data-table-wrap">
-      <table class="data-table" style="--table-min-width:720px">
+      <table class="data-table">
         <thead><tr><th>Node</th><th>CPU</th><th>Memory</th><th>Swap</th><th>Disk</th><th>I/O</th><th>Alerts</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="7">No nodes available.</td></tr>'}</tbody>
       </table>
@@ -2150,7 +2150,7 @@ function renderSparkline(points, key, color) {
     const y = height - ((Number(point[key]) || 0) / max) * height;
     return `${index ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(" ");
-  return `<svg aria-hidden="true" viewBox="0 0 ${width} ${height}" width="80" height="22" style="vertical-align:middle;margin-left:8px"><path d="${escapeHtml(d)}" fill="none" stroke="${escapeHtml(color)}" stroke-width="2"></path></svg>`;
+  return `<svg class="sparkline" aria-hidden="true" viewBox="0 0 ${width} ${height}" width="80" height="22"><path d="${escapeHtml(d)}" fill="none" stroke="${escapeHtml(color)}" stroke-width="2"></path></svg>`;
 }
 
 function nodeStressScore(item) {
@@ -2221,7 +2221,7 @@ function renderNodePanel(item, range) {
       ${metricCard("Pressure", formatPressure(sample.memory?.pressure), `<small>some / full avg10</small>`)}
       ${metricCard("Thermals", Number.isFinite(thermal.maxCelsius) ? `${formatNumber(thermal.maxCelsius)}C` : "-", `<small>${escapeHtml(battery ? `Battery ${formatNumber(battery.percent)}% ${battery.status || ""}` : "No battery")}</small>`)}
     </div>
-    <div class="stack">
+    <div class="stack metrics-chart-stack">
       ${renderLineChart("CPU and memory - " + range, history.points || [], [
         { key: "cpuPercent", label: "CPU", color: "#1d8a5b", max: 100 },
         { key: "memoryPercent", label: "Memory", color: "#f2c94c", max: 100 },
@@ -2243,7 +2243,7 @@ function renderNodePanel(item, range) {
       ${renderNetworkCharts(history.network || [])}
     </div>
     <div class="data-table-wrap">
-      <table class="data-table" style="--table-min-width:640px">
+      <table class="data-table">
         <thead><tr><th>Metric</th><th>Value</th><th>Detail</th></tr></thead>
         <tbody>
           <tr><td>Samples</td><td>${escapeHtml(summary.samples ?? 0)}</td><td>${escapeHtml(formatTimeRange(history.fromMs, history.toMs))}</td></tr>
@@ -2348,24 +2348,24 @@ function renderLineChart(title, points, series, unit = "", formatter = (value) =
     const tooltip = chartTooltip(point, series, formatter);
     return `<rect class="chart-hit" tabindex="0" role="img" aria-label="${escapeHtml(tooltip)}" data-chart-tooltip="${escapeHtml(tooltip).replace(/\n/g, "&#10;")}" x="${left.toFixed(1)}" y="${pad.top}" width="${Math.max(2, right - left).toFixed(1)}" height="${height - pad.top - pad.bottom}" fill="transparent" pointer-events="all"><title>${escapeHtml(tooltip)}</title></rect>`;
   }).join("");
-  const legend = series.map((line) => `<span class="chip chart-legend-item" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:1.25;font-family:inherit;letter-spacing:0;transform:none;font-stretch:normal"><span style="display:inline-block;width:9px;height:9px;min-width:9px;border-radius:999px;background:${escapeHtml(line.color)}"></span>${escapeHtml(line.label)}</span>`).join("");
+  const legend = series.map((line) => `<span class="chip chart-legend-item"><svg class="chart-legend-dot" aria-hidden="true" viewBox="0 0 9 9" width="9" height="9"><circle cx="4.5" cy="4.5" r="4.5" fill="${escapeHtml(line.color)}"></circle></svg>${escapeHtml(line.label)}</span>`).join("");
   const latest = rows.at(-1) || {};
   const latestText = series.map((line) => `${line.label}: ${formatter(Number(latest[line.key]) || 0)}`).join(" | ");
   return `<div class="panel">
     <div class="section-header"><h3>${escapeHtml(title)}</h3><small>${escapeHtml(latestText)}</small></div>
-    <div class="chart-wrap" data-chart-wrap style="position:relative;width:100%;min-height:180px">
-      <span class="chart-axis-label chart-axis-label-top" style="position:absolute;left:4px;top:4px;z-index:1;pointer-events:none;color:var(--muted);font-size:11px;line-height:1.2;letter-spacing:0;font-family:inherit">${escapeHtml(formatter(maxValue))}</span>
-      <span class="chart-axis-label chart-axis-label-bottom" style="position:absolute;left:4px;bottom:26px;z-index:1;pointer-events:none;color:var(--muted);font-size:11px;line-height:1.2;letter-spacing:0;font-family:inherit">0</span>
-      <svg role="img" aria-label="${escapeHtml(title)} chart" viewBox="0 0 ${width} ${height}" width="100%" height="180" preserveAspectRatio="none" style="display:block">
+    <div class="chart-wrap" data-chart-wrap>
+      <span class="chart-axis-label chart-axis-label-top">${escapeHtml(formatter(maxValue))}</span>
+      <span class="chart-axis-label chart-axis-label-bottom">0</span>
+      <svg role="img" aria-label="${escapeHtml(title)} chart" viewBox="0 0 ${width} ${height}" width="100%" height="180" preserveAspectRatio="none">
         <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
         <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="currentColor" opacity="0.18"></line>
         <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="currentColor" opacity="0.18"></line>
         ${paths}
         ${hitAreas}
       </svg>
-      <div class="chart-tooltip" data-chart-tooltip-popup hidden style="position:absolute;left:0;top:0;z-index:20;max-width:280px;white-space:pre-line;pointer-events:none;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);box-shadow:var(--shadow);font-size:12px;line-height:1.35;letter-spacing:0;font-family:inherit"></div>
+      <div class="chart-tooltip" data-chart-tooltip-popup hidden></div>
     </div>
-    <div class="row chart-legend" style="align-items:center;gap:6px">${legend}</div>
+    <div class="row chart-legend">${legend}</div>
     <small class="chart-tooltip-note">Hover the chart for exact values.</small>
   </div>`;
 }
@@ -2392,7 +2392,7 @@ function progressBar(value) {
   const cls = number >= 90 ? "error" : number >= 75 ? "warn" : "";
   const width = Math.max(0, Math.min(100, number));
   const color = cls === "error" ? "var(--danger)" : cls === "warn" ? "var(--warn-text)" : "var(--success)";
-  return `<div class="progress" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${width}" style="height:7px;width:100%;background:color-mix(in srgb,var(--border) 50%,transparent);border-radius:999px;overflow:hidden"><span class="progress-fill ${cls}" style="display:block;height:100%;width:${width}%;max-width:${width}%;min-width:0;background:${color};border-radius:inherit"></span></div>`;
+  return `<svg class="progress-svg ${cls}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${width}" viewBox="0 0 100 7" preserveAspectRatio="none"><rect class="progress-track" x="0" y="0" width="100" height="7" rx="3.5"></rect><rect class="progress-fill" x="0" y="0" width="${width}" height="7" rx="3.5" fill="${color}"></rect></svg>`;
 }
 
 function panelScript() {

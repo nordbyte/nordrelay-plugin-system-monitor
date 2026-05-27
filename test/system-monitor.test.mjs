@@ -336,10 +336,10 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /class="stack"/);
   assert.match(parsed.html, /class="metrics-grid"/);
   assert.match(parsed.html, /class="panel"/);
-  assert.match(parsed.html, /class="progress"/);
+  assert.match(parsed.html, /class="progress-svg/);
   assert.match(parsed.html, /aria-valuenow="10"/);
-  assert.match(parsed.html, /width:10%/);
-  assert.match(parsed.html, /max-width:10%/);
+  assert.match(parsed.html, /width="10"/);
+  assert.match(parsed.html, /metrics-chart-stack/);
   assert.match(parsed.html, /<svg role="img"/);
   assert.match(parsed.html, /class="chart-hit"/);
   assert.match(parsed.html, /data-chart-tooltip=/);
@@ -363,5 +363,6 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /NordRelayPanel\.reload/);
   assert.doesNotMatch(parsed.html, /<!doctype html>/i);
   assert.doesNotMatch(parsed.html, /<style>/i);
+  assert.doesNotMatch(parsed.html, /style="/i);
   assert.doesNotMatch(parsed.html, /<text /i);
 });
