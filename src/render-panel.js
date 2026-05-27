@@ -473,10 +473,8 @@ function metricRow(label, value, suffix) {
 
 function progressBar(value) {
   const number = Number(value) || 0;
-  const cls = number >= 90 ? "error" : number >= 75 ? "warn" : "";
   const width = Math.max(0, Math.min(100, number));
-  const color = cls === "error" ? "var(--danger)" : cls === "warn" ? "var(--warn-text)" : "var(--success)";
-  return `<svg class="progress-svg ${cls}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${width}" viewBox="0 0 100 7" preserveAspectRatio="none"><rect class="progress-track" x="0" y="0" width="100" height="7" rx="3.5"></rect><rect class="progress-fill" x="0" y="0" width="${width}" height="7" rx="3.5" fill="${color}"></rect></svg>`;
+  return `<svg class="progress-svg" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${width}" viewBox="0 0 100 7" preserveAspectRatio="none"><rect class="progress-track" x="0" y="0" width="100" height="7" rx="3.5"></rect><rect class="progress-fill" x="0" y="0" width="${width}" height="7" rx="3.5" fill="var(--success,#1d8a5b)"></rect></svg>`;
 }
 
 export function dashboardPanelScript() {
@@ -618,8 +616,12 @@ export function dashboardPanelScript() {
     hit.addEventListener('focus',function(){showTooltip(hit);});
     hit.addEventListener('blur',function(){hideTooltip(hit);});
   });
+  var autoRefreshStateKey='__nordrelaySystemMonitorAutoRefresh';
+  var previousState=(typeof window!=='undefined')?window[autoRefreshStateKey]:null;
+  if(previousState&&typeof previousState.stop==='function')previousState.stop();
   var timer=null;
   var remainingMs=0;
+  var nextRefreshAt=0;
   var checkbox=root.querySelector('[data-auto-refresh]');
   var countdown=root.querySelector('[data-auto-refresh-countdown]');
   function refreshMs(){return Math.max(1000,Number(root.dataset.autoRefreshMs)||10000);}
@@ -630,23 +632,30 @@ export function dashboardPanelScript() {
       countdown.textContent='';
       return;
     }
+    remainingMs=Math.max(0,nextRefreshAt-Date.now());
     countdown.hidden=false;
     countdown.textContent='('+Math.max(0,Math.ceil(remainingMs/1000))+'s)';
   }
   function clearTimer(){if(timer){clearInterval(timer);timer=null;}}
-  function stop(){clearTimer();remainingMs=0;renderCountdown();}
+  function stop(){clearTimer();nextRefreshAt=0;remainingMs=0;renderCountdown();}
+  function scheduleNext(){nextRefreshAt=Date.now()+refreshMs();}
+  function isCurrentAutoRefreshInstance(){return typeof window==='undefined'||window[autoRefreshStateKey]===stateHandle;}
   function tick(){
+    if(!isCurrentAutoRefreshInstance()){stop();return;}
     if(!autoRefreshEnabled()){stop();return;}
-    remainingMs-=1000;
+    remainingMs=nextRefreshAt-Date.now();
     if(remainingMs<=0){
-      remainingMs=refreshMs();
+      scheduleNext();
       renderCountdown();
       if(document.visibilityState==='visible')panelReload(input(root.dataset.range));
       return;
     }
     renderCountdown();
   }
-  function start(){clearTimer();remainingMs=refreshMs();renderCountdown();timer=(typeof api!=='undefined'&&api&&api.setInterval?api.setInterval(tick,1000):setInterval(tick,1000));}
+  function start(){clearTimer();scheduleNext();renderCountdown();timer=(typeof api!=='undefined'&&api&&api.setInterval?api.setInterval(tick,1000):setInterval(tick,1000));}
+  var stateHandle={stop:stop};
+  if(typeof window!=='undefined')window[autoRefreshStateKey]=stateHandle;
+  if(typeof api!=='undefined'&&api&&api.onCleanup)api.onCleanup(function(){stop();if(typeof window!=='undefined'&&window[autoRefreshStateKey]===stateHandle)window[autoRefreshStateKey]=null;});
   if(checkbox)checkbox.addEventListener('change',function(){checkbox.checked?start():stop();});
   if(typeof api!=='undefined'&&api&&api.addEventListener)api.addEventListener(window,'pagehide',stop);else window.addEventListener('pagehide',stop);
   if(checkbox&&checkbox.checked)start();else renderCountdown();

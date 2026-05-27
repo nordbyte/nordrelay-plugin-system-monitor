@@ -498,6 +498,7 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /class="progress-svg/);
   assert.match(parsed.html, /aria-valuenow="10"/);
   assert.match(parsed.html, /width="10"/);
+  assert.match(parsed.html, /fill="var\(--success,#1d8a5b\)"/);
   assert.match(parsed.html, /metrics-chart-stack/);
   assert.match(parsed.html, /data-auto-refresh checked/);
   assert.match(parsed.html, /data-auto-refresh-countdown/);
@@ -505,6 +506,9 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.panel.script, /autoRefresh:autoRefreshEnabled\(\)/);
   assert.match(parsed.panel.script, /Math\.ceil\(remainingMs\/1000\)/);
   assert.match(parsed.panel.script, /if\(checkbox&&checkbox\.checked\)start\(\)/);
+  assert.match(parsed.panel.script, /__nordrelaySystemMonitorAutoRefresh/);
+  assert.match(parsed.panel.script, /nextRefreshAt=Date\.now\(\)\+refreshMs\(\)/);
+  assert.match(parsed.panel.script, /isCurrentAutoRefreshInstance/);
   assert.match(parsed.html, /data-node-filter/);
   assert.match(parsed.html, /data-node-sort/);
   assert.match(parsed.html, /data-node-collapse/);
