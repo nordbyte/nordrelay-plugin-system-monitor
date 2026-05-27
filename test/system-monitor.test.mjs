@@ -512,6 +512,10 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /data-node-filter/);
   assert.match(parsed.html, /data-node-sort/);
   assert.match(parsed.html, /data-node-collapse/);
+  assert.match(parsed.html, /data-selected-node-key=/);
+  assert.match(parsed.html, /monitor-comparison-panel/);
+  assert.match(parsed.html, /data-monitor-node-select=/);
+  assert.match(parsed.html, /data-monitor-node-panel/);
   assert.match(parsed.html, /Top process/);
   assert.match(parsed.html, /Collector diagnostics/);
   assert.match(parsed.html, /Alert history/);
@@ -536,10 +540,73 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /Pressure/);
   assert.match(parsed.html, /Swap/);
   assert.match(parsed.panel.script, /panelReload/);
+  assert.match(parsed.panel.script, /selectedNodeKey:root\.dataset\.selectedNodeKey/);
+  assert.match(parsed.panel.script, /selectNodePanel/);
   assert.match(parsed.panel.script, /data-chart-hit-area/);
   assert.doesNotMatch(parsed.html, /<script>/i);
   assert.doesNotMatch(parsed.html, /<!doctype html>/i);
   assert.doesNotMatch(parsed.html, /<style>/i);
   assert.doesNotMatch(parsed.html, /style="/i);
   assert.doesNotMatch(parsed.html, /<text /i);
+});
+
+test("shows only the local node details by default and can switch nodes", () => {
+  const sample = (name, cpu) => ({
+    timestamp: "2026-05-26T08:00:00.000Z",
+    timestampMs: Date.parse("2026-05-26T08:00:00.000Z"),
+    node: { id: name === "Local node" ? "local" : name, name, platform: "linux", hostname: name.toLowerCase().replace(/\s+/g, "-") },
+    cpu: { percent: cpu, load1: 0.1, load5: 0.2, load15: 0.3, breakdown: { user: cpu / 2, system: 1, iowait: 0, idle: 100 - cpu }, perCore: [] },
+    memory: { percent: 30, usedBytes: 3 * 1024 ** 3, availableBytes: 7 * 1024 ** 3, totalBytes: 10 * 1024 ** 3, swapPercent: 0 },
+    disk: [],
+    diskIo: [],
+    network: [],
+    networkHealth: {},
+    environment: {},
+    alerts: [],
+    collectors: [],
+    processes: [],
+  });
+  const nodeResult = (id, name, cpu) => ({
+    node: { id, name, platform: "linux" },
+    ok: true,
+    result: {
+      output: {
+        panelData: {
+          current: sample(name, cpu),
+          history: { points: [] },
+          summary: {},
+          storage: {},
+        },
+      },
+    },
+  });
+  const payload = {
+    protocolVersion: 1,
+    type: "web-panel",
+    pluginId: "system-monitor",
+    panelId: "dashboard",
+    input: {
+      aggregate: {
+        results: [
+          nodeResult("remote-1", "Remote node", 80),
+          nodeResult("local", "Local node", 10),
+        ],
+      },
+    },
+    settings: {},
+    dataDir: "/tmp/nordrelay-system-monitor-test",
+    permissions: ["system.metrics.read"],
+    context: {},
+  };
+  const result = spawnSync(process.execPath, ["index.js"], {
+    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
+    input: JSON.stringify(payload),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.match(parsed.html, /data-selected-node-key="local"/);
+  assert.match(parsed.html, /data-monitor-node-key="local"[^>]*class="selected"/);
+  assert.match(parsed.html, /data-monitor-node-key="local"[^>]*>\s*<div class="section-header">/);
+  assert.match(parsed.html, /data-monitor-node-key="remote-1"[^>]* hidden>/);
 });
