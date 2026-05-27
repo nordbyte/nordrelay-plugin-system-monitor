@@ -2,15 +2,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  COMMANDS,
   parseDf,
   parseDfInodes,
+  parseDarwinBattery,
+  parseDarwinIostatOutput,
+  parseDarwinSwapUsage,
+  parseNetstatIb,
   parseProcDiskStats,
   parseProcMeminfo,
   parseProcNetDev,
@@ -19,14 +24,30 @@ import {
   parseProcStat,
   parseProcVmstat,
   parsePsOutput,
+  parseWindowsBatteryOutput,
   parseWindowsDiskOutput,
   parseWindowsDiskIoOutput,
   parseWindowsNetworkOutput,
   parseWindowsProcessOutput,
+  parseWindowsSwapOutput,
 } from "../index.js";
 
 function assertPluginSucceeded(result) {
   assert.equal(result.status, 0, result.stderr || result.stdout || result.error?.message);
+}
+
+function pluginRoot() {
+  return path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+}
+
+function invokePlugin(payload) {
+  const result = spawnSync(process.execPath, ["index.js"], {
+    cwd: pluginRoot(),
+    input: JSON.stringify(payload),
+    encoding: "utf8",
+  });
+  assertPluginSucceeded(result);
+  return JSON.parse(result.stdout);
 }
 
 function testSettings(settings = {}) {
@@ -115,19 +136,54 @@ test("parses Windows counters", () => {
   assert.equal(diskIo[0].writeBytesPerSec, 20);
   const network = parseWindowsNetworkOutput(JSON.stringify({ Name: "Ethernet", ReceivedBytes: "10", SentBytes: "20", ReceivedPacketErrors: "1", OutboundPacketErrors: "2" }));
   assert.deepEqual(network, [{ name: "Ethernet", rxBytes: 10, txBytes: 20, rxErrors: 1, txErrors: 2, rxDropped: 0, txDropped: 0 }]);
+  const swap = parseWindowsSwapOutput(JSON.stringify({ TotalVirtualMemorySize: 2000, FreeVirtualMemory: 500, TotalVisibleMemorySize: 1000, FreePhysicalMemory: 250 }));
+  assert.equal(swap.swapTotalBytes, 1000 * 1024);
+  assert.equal(swap.swapUsedBytes, 750 * 1024);
+  const battery = parseWindowsBatteryOutput(JSON.stringify({ EstimatedChargeRemaining: 73, BatteryStatus: 2 }));
+  assert.equal(battery.percent, 73);
+  assert.equal(battery.status, "AC");
+});
+
+test("parses macOS counters", () => {
+  const swap = parseDarwinSwapUsage("total = 4096.00M  used = 1024.00M  free = 3072.00M  (encrypted)");
+  assert.equal(swap.swapTotalBytes, 4096 * 1024 ** 2);
+  assert.equal(swap.swapUsedBytes, 1024 * 1024 ** 2);
+
+  const battery = parseDarwinBattery(`Now drawing from 'AC Power'
+ -InternalBattery-0 (id=1234567) 85%; charging; 2:01 remaining present: true`);
+  assert.equal(battery.percent, 85);
+  assert.equal(battery.status, "Charging");
+
+  const diskIo = parseDarwinIostatOutput(`          disk0           disk1
+KB/t xfrs MB/s KB/t xfrs MB/s
+4.00 10 0.04 8.00 20 0.16
+`);
+  assert.equal(diskIo[0].name, "disk0");
+  assert.equal(diskIo[0].writeBytesPerSec, 41943.04);
+
+  const network = parseNetstatIb(`Name  Mtu Network Address Ipkts Ierrs Idrop Ibytes Opkts Oerrs Obytes Coll
+en0 1500 <Link#4> aa:bb 1 2 1000 20 0 2000 0 3
+lo0 16384 <Link#1> lo0 1 0 0 1 1 0 1 0
+`);
+  assert.deepEqual(network, [{ name: "en0", rxBytes: 1000, txBytes: 2000, rxErrors: 1, txErrors: 3, rxDropped: 0, txDropped: 0 }]);
 });
 
 test("parses top processes and marks coding agents", () => {
-  const rows = parsePsOutput(`  PID %CPU %MEM   RSS COMM             COMMAND
-  100 12.5  1.5 10000 node             node server.js
-  101  2.0  0.5  8000 codex            codex exec prompt
+  const rows = parsePsOutput(`  PID  PPID %CPU %MEM   RSS COMM             COMMAND
+  100     1 12.5  1.5 10000 node             node /tmp/.openclaw/browser.js
+  101     1  2.0  0.5  8000 codex            codex exec prompt
+  102   101  1.0  0.2  3000 bash             bash tool.sh
 `);
   assert.equal(rows[0].agent, true);
   assert.equal(rows[0].name, "codex");
+  assert.equal(rows[0].processType, "agent");
   assert.equal(rows[0].rssBytes, 8000 * 1024);
+  assert.equal(rows[1].processType, "agent-child");
+  assert.equal(rows[2].agent, false);
 
   const windows = parseWindowsProcessOutput(JSON.stringify([{ Id: 10, ProcessName: "claude", WorkingSet64: 1024, Path: "C:\\\\Tools\\\\claude.exe" }]));
   assert.equal(windows[0].agent, true);
+  assert.equal(windows[0].processType, "agent");
   assert.equal(windows[0].rssBytes, 1024);
 });
 
@@ -144,13 +200,7 @@ test("collects a sample through the NordRelay plugin request contract", async ()
     permissions: ["system.metrics.read"],
     context: { runtime: { nodeName: "test-node", platform: process.platform } },
   };
-  const result = spawnSync(process.execPath, ["index.js"], {
-    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
-    input: JSON.stringify(payload),
-    encoding: "utf8",
-  });
-  assertPluginSucceeded(result);
-  const parsed = JSON.parse(result.stdout);
+  const parsed = invokePlugin(payload);
   assert.equal(parsed.ok, true);
   assert.equal(parsed.output.sample.node.name, "test-node");
   assert.equal(typeof parsed.output.sample.memory.percent, "number");
@@ -172,20 +222,9 @@ test("returns chart-ready panel data from SQLite history", async () => {
     context: { runtime: { nodeName: "test-node", platform: process.platform } },
   };
   for (let index = 0; index < 3; index += 1) {
-    const sampleResult = spawnSync(process.execPath, ["index.js"], {
-      cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
-      input: JSON.stringify(basePayload),
-      encoding: "utf8",
-    });
-    assertPluginSucceeded(sampleResult);
+    invokePlugin(basePayload);
   }
-  const panelResult = spawnSync(process.execPath, ["index.js"], {
-    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
-    input: JSON.stringify({ ...basePayload, command: "panel-data", input: { range: "1h", maxPoints: 20 } }),
-    encoding: "utf8",
-  });
-  assertPluginSucceeded(panelResult);
-  const parsed = JSON.parse(panelResult.stdout);
+  const parsed = invokePlugin({ ...basePayload, command: "panel-data", input: { range: "1h", maxPoints: 20 } });
   assert.equal(parsed.ok, true);
   assert.equal(parsed.output.panelData.current.node.name, "test-node");
   assert.ok(parsed.output.panelData.history.points.length >= 1);
@@ -200,13 +239,7 @@ test("returns chart-ready panel data from SQLite history", async () => {
   assert.ok(Array.isArray(parsed.output.panelData.history.diskIo));
   assert.ok(parsed.output.panelData.storage.rollupRows >= 1);
 
-  const exportResult = spawnSync(process.execPath, ["index.js"], {
-    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
-    input: JSON.stringify({ ...basePayload, command: "export", input: { format: "csv", range: "1h", maxPoints: 20 } }),
-    encoding: "utf8",
-  });
-  assertPluginSucceeded(exportResult);
-  const exported = JSON.parse(exportResult.stdout);
+  const exported = invokePlugin({ ...basePayload, command: "export", input: { format: "csv", range: "1h", maxPoints: 20 } });
   assert.equal(exported.ok, true);
   assert.equal(exported.output.format, "csv");
   assert.match(exported.output.data, /timestamp,cpu_percent,memory_percent,swap_percent/);
@@ -225,25 +258,58 @@ test("stores alert history and collector diagnostics", async () => {
     permissions: ["system.metrics.read"],
     context: { runtime: { nodeName: "alert-node", platform: process.platform } },
   };
-  const sampleResult = spawnSync(process.execPath, ["index.js"], {
-    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
-    input: JSON.stringify(payload),
-    encoding: "utf8",
-  });
-  assertPluginSucceeded(sampleResult);
-  const sample = JSON.parse(sampleResult.stdout).output.sample;
+  const sample = invokePlugin(payload).output.sample;
   assert.ok(sample.alerts.some((alert) => alert.label === "Memory"));
   assert.ok(sample.collectors.some((collector) => collector.name === "memory" && collector.ok));
   assert.ok(Array.isArray(sample.processes));
 
-  const alertResult = spawnSync(process.execPath, ["index.js"], {
-    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
-    input: JSON.stringify({ ...payload, command: "alerts", input: { range: "24h" } }),
-    encoding: "utf8",
-  });
-  assertPluginSucceeded(alertResult);
-  const alerts = JSON.parse(alertResult.stdout).output.alerts.events;
+  const alerts = invokePlugin({ ...payload, command: "alerts", input: { range: "24h" } }).output.alerts.events;
   assert.ok(alerts.some((alert) => alert.label === "Memory"));
+});
+
+test("handles notifications, acknowledgement, JSONL export, and storage maintenance commands", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "nordrelay-system-monitor-"));
+  const payload = {
+    protocolVersion: 1,
+    type: "command",
+    pluginId: "system-monitor",
+    command: "sample",
+    input: {},
+    settings: testSettings({ thresholdMemoryPercent: 1, alertCooldownMinutes: 0 }),
+    dataDir,
+    permissions: ["system.metrics.read"],
+    context: { runtime: { nodeId: "node-a", nodeName: "alert-node", platform: process.platform } },
+  };
+
+  const sample = invokePlugin(payload).output.sample;
+  assert.ok(sample.notifications.some((item) => item.label === "Memory"));
+
+  const notifications = invokePlugin({ ...payload, command: "notifications", input: { range: "24h", includeDelivered: false } }).output.notifications.events;
+  assert.ok(notifications.some((item) => item.label === "Memory" && item.delivered === false));
+
+  const delivered = invokePlugin({ ...payload, command: "notifications", input: { range: "24h", markDelivered: true } }).output.notifications.events;
+  assert.ok(delivered.length >= 1);
+  const pending = invokePlugin({ ...payload, command: "notifications", input: { range: "24h" } }).output.notifications.events;
+  assert.equal(pending.length, 0);
+
+  const ack = invokePlugin({ ...payload, command: "ack-alert", input: { label: "Memory", nodeId: "node-a", untilMinutes: 30 } }).output.acknowledgement;
+  assert.equal(ack.label, "Memory");
+  const acknowledgedSample = invokePlugin(payload).output.sample;
+  assert.equal(acknowledgedSample.alerts.some((alert) => alert.label === "Memory"), false);
+
+  const jsonl = invokePlugin({ ...payload, command: "export", input: { format: "jsonl", range: "24h", maxPoints: 10, includeAlerts: true, includeNotifications: true } }).output;
+  assert.equal(jsonl.format, "jsonl");
+  assert.match(jsonl.data, /"timestamp"/);
+
+  const storageHealth = invokePlugin({ ...payload, command: "storage-health", input: {} }).output;
+  assert.equal(storageHealth.health.integrity, "ok");
+  assert.equal(storageHealth.storage.health.integrity, "ok");
+
+  const checkpoint = invokePlugin({ ...payload, command: "checkpoint", input: { mode: "TRUNCATE" } }).output;
+  assert.ok(Array.isArray(checkpoint.checkpoint));
+
+  const rebuilt = invokePlugin({ ...payload, command: "rebuild-rollups", input: {} }).output.rebuilt;
+  assert.ok(rebuilt.samples >= 1);
 });
 
 test("silences configured alert labels", async () => {
@@ -259,13 +325,7 @@ test("silences configured alert labels", async () => {
     permissions: ["system.metrics.read"],
     context: { runtime: { nodeName: "silent-node", platform: process.platform } },
   };
-  const result = spawnSync(process.execPath, ["index.js"], {
-    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
-    input: JSON.stringify(payload),
-    encoding: "utf8",
-  });
-  assertPluginSucceeded(result);
-  const sample = JSON.parse(result.stdout).output.sample;
+  const sample = invokePlugin(payload).output.sample;
   assert.equal(sample.alerts.some((alert) => alert.label === "Memory"), false);
 });
 
@@ -327,13 +387,7 @@ test("migrates an existing v1 SQLite database in place", async () => {
     permissions: ["system.metrics.read"],
     context: { runtime: { nodeName: "test-node", platform: process.platform } },
   };
-  const result = spawnSync(process.execPath, ["index.js"], {
-    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
-    input: JSON.stringify(payload),
-    encoding: "utf8",
-  });
-  assertPluginSucceeded(result);
-  const parsed = JSON.parse(result.stdout);
+  const parsed = invokePlugin(payload);
   assert.equal(parsed.ok, true);
   const migrated = new DatabaseSync(dbPath);
   const sampleColumns = migrated.prepare("PRAGMA table_info(samples)").all().map((row) => row.name);
@@ -341,6 +395,24 @@ test("migrates an existing v1 SQLite database in place", async () => {
   migrated.close();
   assert.ok(sampleColumns.includes("swap_percent"));
   assert.ok(tables.includes("rollups"));
+});
+
+test("manifest command catalog matches runtime command catalog", () => {
+  const manifest = JSON.parse(readFileSync(path.join(pluginRoot(), "nordrelay.plugin.json"), "utf8"));
+  const manifestCommands = manifest.capabilities.commands.map((command) => command.name).sort();
+  assert.deepEqual(manifestCommands, [...COMMANDS].sort());
+  assert.equal(manifest.entry, "index.js");
+  assert.ok(manifest.settings.some((setting) => setting.key === "diskSampleIntervalMs"));
+  assert.ok(manifest.settings.some((setting) => setting.key === "alertCooldownMinutes"));
+});
+
+test("can run an optional NordRelay plugin-host smoke", { skip: process.env.NORDRELAY_PLUGIN_HOST_SMOKE !== "1" }, () => {
+  const result = spawnSync("nordrelay", ["plugin", "invoke", "system-monitor", "command", "status"], {
+    cwd: pluginRoot(),
+    encoding: "utf8",
+    timeout: 10000,
+  });
+  assertPluginSucceeded(result);
 });
 
 test("renders the web panel with NordRelay shared plugin UI classes", async () => {

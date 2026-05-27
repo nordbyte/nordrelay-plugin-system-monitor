@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 import { cpus, freemem, hostname, loadavg, platform, release, totalmem, uptime } from "node:os";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { collectCachedMetric, collectMetric } from "./collectors.js";
+import { normalizeCommand } from "./commands.js";
+import { rollupPeriodForRange as selectRollupPeriod } from "./history.js";
 import { collectProcesses } from "./processes.js";
+import { renderDashboardPanel } from "./render-panel.js";
+import { checkpointDatabase, databaseFilesSize, databaseHealth, optimizeDatabase } from "./storage.js";
 
 const DB_FILE = "metrics.sqlite";
 const STATE_FILE = "state.json";
@@ -133,7 +138,7 @@ export async function runPlugin() {
 }
 
 async function handleCommand(request, db, dataDir, settings) {
-  const command = request.command || request.capabilityId;
+  const command = normalizeCommand(request);
   if (command === "sample") {
     const sample = await collectAndStoreSample(db, dataDir, settings, request);
     writeResult({ ok: true, output: { sample } });
@@ -166,6 +171,16 @@ async function handleCommand(request, db, dataDir, settings) {
     writeResult({ ok: true, output: { alerts: readAlertHistory(db, request.input, settings) } });
     return;
   }
+  if (command === "notifications") {
+    writeResult({ ok: true, output: { notifications: readNotifications(db, request.input, settings) } });
+    return;
+  }
+  if (command === "ack-alert") {
+    const state = await readState(dataDir);
+    const acknowledgement = await acknowledgeAlert(dataDir, state, request.input, settings);
+    writeResult({ ok: true, output: { acknowledgement } });
+    return;
+  }
   if (command === "export") {
     writeResult({ ok: true, output: buildExport(db, request.input, settings) });
     return;
@@ -181,6 +196,16 @@ async function handleCommand(request, db, dataDir, settings) {
     });
     return;
   }
+  if (command === "storage-health") {
+    writeResult({ ok: true, output: { storage: await storageStatus(db, dataDir, settings), health: await databaseHealth(db, dataDir, DB_FILE) } });
+    return;
+  }
+  if (command === "checkpoint") {
+    const checkpoint = checkpointDatabase(db, request.input?.mode || "TRUNCATE");
+    optimizeDatabase(db);
+    writeResult({ ok: true, output: { checkpoint, health: await databaseHealth(db, dataDir, DB_FILE) } });
+    return;
+  }
   if (command === "cleanup") {
     const deleted = cleanupOldSamples(db, settings);
     writeResult({ ok: true, output: { deleted, storage: await storageStatus(db, dataDir, settings) } });
@@ -191,6 +216,11 @@ async function handleCommand(request, db, dataDir, settings) {
     writeResult({ ok: true, output: { storage: await storageStatus(db, dataDir, settings) } });
     return;
   }
+  if (command === "rebuild-rollups") {
+    const rebuilt = rebuildRollups(db, request.input || {});
+    writeResult({ ok: true, output: { rebuilt, storage: await storageStatus(db, dataDir, settings) } });
+    return;
+  }
   writeResult({ ok: false, stderr: `Unknown system-monitor command: ${command}` });
 }
 
@@ -199,6 +229,12 @@ async function collectAndStoreSample(db, dataDir, settings, request) {
   const collectorDiagnostics = [];
   const previousCollectors = state.collectors || {};
   const collect = (name, fallback, collector) => collectMetric(name, fallback, collector, previousCollectors, collectorDiagnostics);
+  const collectorCache = { ...(state.collectorCache || {}) };
+  const cachedCollect = (name, intervalMs, fallback, collector) => {
+    const result = collectCachedMetric(name, intervalMs, fallback, collector, state, previousCollectors, collectorDiagnostics);
+    if (result.cacheUpdated) collectorCache[name] = result.cacheEntry;
+    return result.value;
+  };
   const cpuSnapshot = collect("cpu", cpuCountersFromOs(), cpuCounters);
   const networkCounters = settings.trackNetworkInterfaces ? collect("network", [], collectNetworkCounters) : [];
   const networkHealthCounters = settings.trackNetworkInterfaces ? collect("network-health", {}, collectNetworkHealthCounters) : {};
@@ -216,15 +252,15 @@ async function collectAndStoreSample(db, dataDir, settings, request) {
     perCore: cpuCoreUsage(state.cpuCores, cpuSnapshot.cores),
   };
   const memory = memorySample(state.memory, memoryCounters, state.lastSampleAtMs, timestampMs);
-  const disk = settings.trackDisks ? collect("disk", [], () => collectDisks(settings)) : [];
+  const disk = settings.trackDisks ? cachedCollect("disk", settings.diskSampleIntervalMs, [], () => collectDisks(settings)) : [];
   const diskIo = diskIoSample(state.diskIo, diskIoCounters, state.lastSampleAtMs, timestampMs);
   const network = networkSample(state.network, networkCounters, state.lastSampleAtMs, timestampMs);
   const networkHealth = networkHealthSample(state.networkHealth, networkHealthCounters, state.lastSampleAtMs, timestampMs, network);
   const environment = {
-    thermal: settings.trackThermals ? collect("thermal", [], collectThermals) : [],
-    battery: settings.trackBattery ? collect("battery", null, collectBattery) : null,
+    thermal: settings.trackThermals ? cachedCollect("thermal", settings.thermalSampleIntervalMs, [], collectThermals) : [],
+    battery: settings.trackBattery ? cachedCollect("battery", settings.batterySampleIntervalMs, null, collectBattery) : null,
   };
-  const processes = settings.trackProcesses ? collect("processes", [], () => collectProcesses(platform(), settings.maxProcesses)) : [];
+  const processes = settings.trackProcesses ? cachedCollect("processes", settings.processSampleIntervalMs, [], () => collectProcesses(platform(), settings.maxProcesses)) : [];
   const sample = {
     timestamp: new Date(timestampMs).toISOString(),
     timestampMs,
@@ -247,8 +283,9 @@ async function collectAndStoreSample(db, dataDir, settings, request) {
     processes,
     collectors: collectorDiagnostics,
   };
-  sample.alerts = buildAlerts(sample, settings);
+  sample.alerts = buildAlerts(sample, settings, state);
   const id = insertSample(db, sample);
+  const notifications = recordAlertNotifications(db, sample, settings, state, id);
   maybeCleanup(db, settings, state, timestampMs);
   await writeState(dataDir, {
     cpu: cpuSnapshot,
@@ -258,11 +295,14 @@ async function collectAndStoreSample(db, dataDir, settings, request) {
     network: networkCounters,
     networkHealth: networkHealthCounters,
     collectors: Object.fromEntries(collectorDiagnostics.map((item) => [item.name, item])),
+    collectorCache,
+    alertNotifications: state.alertNotifications || {},
+    acknowledgedAlerts: state.acknowledgedAlerts || {},
     lastSampleAt: sample.timestamp,
     lastSampleAtMs: timestampMs,
     lastCleanupAtMs: state.lastCleanupAtMs,
   });
-  return { ...sample, id };
+  return { ...sample, id, notifications };
 }
 
 async function ensureFreshSample(db, dataDir, settings, request) {
@@ -518,6 +558,18 @@ function initializeSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_alert_events_ts ON alert_events(ts);
     CREATE INDEX IF NOT EXISTS idx_alert_events_node_ts ON alert_events(node_id, ts);
+    CREATE TABLE IF NOT EXISTS notification_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      node_id TEXT NOT NULL,
+      channel TEXT,
+      level TEXT,
+      label TEXT,
+      message TEXT,
+      delivered INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_notification_events_ts ON notification_events(ts);
+    CREATE INDEX IF NOT EXISTS idx_notification_events_delivered ON notification_events(delivered, ts);
   `);
   migrateSchema(db);
   db.prepare("INSERT OR REPLACE INTO schema_meta(key,value) VALUES (?, ?)").run("schemaVersion", String(SQLITE_SCHEMA_VERSION));
@@ -1031,7 +1083,7 @@ function readRollupHistory(db, range) {
 }
 
 function rollupPeriodForRange(range) {
-  return range.rangeMs >= RANGE_PRESETS["30d"] ? "1d" : range.rangeMs >= RANGE_PRESETS["7d"] ? "1h" : null;
+  return selectRollupPeriod(range, RANGE_PRESETS);
 }
 
 function readDiskRollupSeries(db, range) {
@@ -1356,6 +1408,87 @@ function readAlertHistory(db, input = {}, settings = normalizeSettings()) {
   };
 }
 
+function readNotifications(db, input = {}, settings = normalizeSettings()) {
+  const range = resolveRange(input, settings);
+  const includeDelivered = input.includeDelivered === true || input.includeDelivered === "true";
+  const limit = Math.max(1, Math.min(500, Math.round(numberInput(input.limit, 100))));
+  const rows = db.prepare(`
+    SELECT id, ts, node_id, channel, level, label, message, delivered
+    FROM notification_events
+    WHERE ts >= ? AND ts <= ? ${includeDelivered ? "" : "AND delivered = 0"}
+    ORDER BY ts DESC
+    LIMIT ?
+  `).all(range.fromMs, range.toMs, limit);
+  if (input.markDelivered === true || input.markDelivered === "true") {
+    const ids = rows.map((row) => Number(row.id)).filter(Boolean);
+    if (ids.length) db.prepare(`UPDATE notification_events SET delivered = 1 WHERE id IN (${ids.map(() => "?").join(",")})`).run(...ids);
+  }
+  return {
+    ...range,
+    events: rows.map((row) => ({
+      id: Number(row.id),
+      timestamp: new Date(Number(row.ts)).toISOString(),
+      timestampMs: Number(row.ts),
+      nodeId: row.node_id || "",
+      channel: row.channel || "",
+      level: row.level || "",
+      label: row.label || "",
+      message: row.message || "",
+      delivered: Number(row.delivered) === 1,
+    })),
+  };
+}
+
+async function acknowledgeAlert(dataDir, state, input = {}, settings = normalizeSettings()) {
+  const label = String(input.label || "").trim();
+  if (!label) throw new Error("ack-alert requires input.label");
+  const nodeId = String(input.nodeId || "*");
+  const untilMinutes = Math.max(1, Math.min(60 * 24 * 365, numberInput(input.untilMinutes, settings.alertAcknowledgeMinutes)));
+  const key = `${nodeId}\0${label}`;
+  state.acknowledgedAlerts = state.acknowledgedAlerts || {};
+  state.acknowledgedAlerts[key] = Date.now() + untilMinutes * 60 * 1000;
+  await writeState(dataDir, state);
+  return { label, nodeId, until: new Date(state.acknowledgedAlerts[key]).toISOString() };
+}
+
+function recordAlertNotifications(db, sample, settings, state, sampleId) {
+  const cooldownMs = Math.max(0, settings.alertCooldownMinutes) * 60 * 1000;
+  const notifications = [];
+  state.alertNotifications = state.alertNotifications || {};
+  const stmt = db.prepare(`
+    INSERT INTO notification_events(ts, node_id, channel, level, label, message, delivered)
+    VALUES (?, ?, ?, ?, ?, ?, 0)
+  `);
+  for (const alert of sample.alerts || []) {
+    const key = `${sample.node?.id || ""}\0${alert.label}`;
+    const last = Number(state.alertNotifications[key]) || 0;
+    if (cooldownMs && sample.timestampMs - last < cooldownMs) continue;
+    state.alertNotifications[key] = sample.timestampMs;
+    const message = `${sample.node?.name || "Node"}: ${alert.label} ${formatAlertValue(alert)} reached threshold ${formatAlertThreshold(alert)}`;
+    const notification = {
+      sampleId,
+      timestamp: sample.timestamp,
+      timestampMs: sample.timestampMs,
+      nodeId: sample.node?.id || "",
+      channel: settings.alertChannel,
+      level: alert.level,
+      label: alert.label,
+      message,
+    };
+    stmt.run(notification.timestampMs, notification.nodeId, notification.channel, notification.level, notification.label, notification.message);
+    notifications.push(notification);
+  }
+  return notifications;
+}
+
+function formatAlertValue(alert) {
+  return `${roundNumber(alert.value)}${alert.unit || ""}`;
+}
+
+function formatAlertThreshold(alert) {
+  return `${roundNumber(alert.threshold)}${alert.unit || ""}`;
+}
+
 async function storageStatus(db, dataDir, settings) {
   const row = db.prepare("SELECT count(*) AS samples, min(ts) AS oldest_ts, max(ts) AS newest_ts FROM samples").get();
   const diskRows = db.prepare("SELECT count(*) AS count FROM disks").get();
@@ -1367,13 +1500,14 @@ async function storageStatus(db, dataDir, settings) {
   const diskIoRollupRows = db.prepare("SELECT count(*) AS count FROM disk_io_rollups").get();
   const networkRollupRows = db.prepare("SELECT count(*) AS count FROM network_rollups").get();
   const alertRows = db.prepare("SELECT count(*) AS count FROM alert_events").get();
+  const notificationRows = db.prepare("SELECT count(*) AS count FROM notification_events").get();
   const file = path.join(dataDir, DB_FILE);
-  const wal = `${file}-wal`;
-  const shm = `${file}-shm`;
-  const sizeBytes = (await statSize(file)) + (await statSize(wal)) + (await statSize(shm));
+  const sizeBytes = await databaseFilesSize(file);
+  const health = await databaseHealth(db, dataDir, DB_FILE);
   return {
     database: file,
     sizeBytes,
+    health,
     samples: Number(row?.samples) || 0,
     diskRows: Number(diskRows?.count) || 0,
     networkRows: Number(networkRows?.count) || 0,
@@ -1384,18 +1518,11 @@ async function storageStatus(db, dataDir, settings) {
     diskIoRollupRows: Number(diskIoRollupRows?.count) || 0,
     networkRollupRows: Number(networkRollupRows?.count) || 0,
     alertRows: Number(alertRows?.count) || 0,
+    notificationRows: Number(notificationRows?.count) || 0,
     oldestTimestamp: row?.oldest_ts ? new Date(Number(row.oldest_ts)).toISOString() : null,
     newestTimestamp: row?.newest_ts ? new Date(Number(row.newest_ts)).toISOString() : null,
     retentionDays: settings.retentionDays,
   };
-}
-
-async function statSize(file) {
-  try {
-    return (await stat(file)).size;
-  } catch {
-    return 0;
-  }
 }
 
 function maybeCleanup(db, settings, state, nowMs) {
@@ -1415,6 +1542,7 @@ function cleanupOldSamples(db, settings) {
   db.prepare("DELETE FROM disk_io_rollups WHERE bucket_ms < ?").run(cutoff);
   db.prepare("DELETE FROM network_rollups WHERE bucket_ms < ?").run(cutoff);
   db.prepare("DELETE FROM alert_events WHERE ts < ?").run(cutoff);
+  db.prepare("DELETE FROM notification_events WHERE ts < ?").run(cutoff);
   return Number(result.changes) || 0;
 }
 
@@ -2137,7 +2265,19 @@ function thermalSummary(rows = []) {
   return { maxCelsius: values.length ? Math.max(...values) : null };
 }
 
-function buildAlerts(sample, settings) {
+function primaryDisk(disks) {
+  if (!Array.isArray(disks) || !disks.length) return null;
+  const usable = disks.filter((disk) => Number(disk?.totalBytes) > 0);
+  if (!usable.length) return null;
+  const preferred = usable.find((disk) => disk.mount === "/")
+    || usable.find((disk) => /^[A-Z]:\\?$/i.test(String(disk.mount || "")))
+    || usable.find((disk) => String(disk.mount || "").toLowerCase() === "/system/volumes/data")
+    || usable.find((disk) => String(disk.mount || "").toLowerCase() === "/users")
+    || null;
+  return preferred || [...usable].sort((a, b) => (Number(b.totalBytes) || 0) - (Number(a.totalBytes) || 0))[0];
+}
+
+function buildAlerts(sample, settings, state = {}) {
   const thresholds = settings.thresholds || DEFAULT_THRESHOLDS;
   const alerts = [];
   addThresholdAlert(alerts, "CPU", sample.cpu?.percent, thresholds.cpuPercent, "%", thresholds.criticalPercent);
@@ -2150,7 +2290,15 @@ function buildAlerts(sample, settings) {
   const inodeDisk = (sample.disk || []).find((row) => Number(row.inodesPercent) >= thresholds.diskPercent);
   if (inodeDisk) addThresholdAlert(alerts, `Inodes ${inodeDisk.mount || inodeDisk.filesystem}`, inodeDisk.inodesPercent, thresholds.diskPercent, "%", thresholds.criticalPercent);
   const silenced = new Set(settings.silencedAlertLabels || []);
-  return alerts.filter((alert) => !silenced.has(alert.label));
+  return alerts.filter((alert) => !silenced.has(alert.label) && !isAlertAcknowledged(state, sample.node?.id || "", alert.label));
+}
+
+function isAlertAcknowledged(state, nodeId, label) {
+  const acknowledgements = state.acknowledgedAlerts || {};
+  const now = Date.now();
+  const specific = Number(acknowledgements[`${nodeId}\0${label}`]) || 0;
+  const global = Number(acknowledgements[`*\0${label}`]) || 0;
+  return specific > now || global > now;
 }
 
 function addThresholdAlert(alerts, label, value, threshold, unit, criticalThreshold = DEFAULT_THRESHOLDS.criticalPercent) {
@@ -2281,11 +2429,49 @@ function updateRollups(db, sample) {
   }
 }
 
+function rebuildRollups(db, input = {}) {
+  const limit = Math.max(0, Math.round(Number(input.limit) || 0));
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec("DELETE FROM rollups; DELETE FROM disk_rollups; DELETE FROM disk_io_rollups; DELETE FROM network_rollups;");
+    const rows = db.prepare(`SELECT * FROM samples ORDER BY ts ASC${limit ? " LIMIT ?" : ""}`).all(...(limit ? [limit] : []));
+    for (const row of rows) updateRollups(db, hydrateSample(db, row));
+    db.exec("COMMIT");
+    return { samples: rows.length };
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {}
+    throw error;
+  }
+}
+
 function buildExport(db, input = {}, settings = normalizeSettings()) {
   const format = String(input.format || "json").toLowerCase();
+  const metric = String(input.metric || "").toLowerCase();
   const history = readHistory(db, input, settings);
   const summary = readSummary(db, input, settings);
+  const alerts = input.includeAlerts === true || input.includeAlerts === "true" ? readAlertHistory(db, input, settings) : null;
+  const notifications = input.includeNotifications === true || input.includeNotifications === "true" ? readNotifications(db, { ...input, includeDelivered: true }, settings) : null;
+  const series = metric ? readSeries(db, input, settings) : null;
   const generatedAt = new Date().toISOString();
+  if (format === "jsonl") {
+    const range = resolveRange(input, settings);
+    const nodeId = String(input.nodeId || "");
+    const rows = db.prepare(`
+      SELECT * FROM samples
+      WHERE ts >= ? AND ts <= ? ${nodeId ? "AND node_id = ?" : ""}
+      ORDER BY ts ASC
+      LIMIT ?
+    `).all(...(nodeId ? [range.fromMs, range.toMs, nodeId, range.maxPoints] : [range.fromMs, range.toMs, range.maxPoints]));
+    return {
+      format: "jsonl",
+      filename: `system-monitor-${history.range}-${Date.now()}.jsonl`,
+      contentType: "application/x-ndjson",
+      data: rows.map((row) => JSON.stringify(hydrateSample(db, row))).join("\n"),
+      generatedAt,
+    };
+  }
   if (format === "csv") {
     const rows = [
       ["timestamp", "cpu_percent", "memory_percent", "swap_percent", "disk_read_bps", "disk_write_bps", "network_rx_bps", "network_tx_bps"],
@@ -2312,7 +2498,7 @@ function buildExport(db, input = {}, settings = normalizeSettings()) {
     format: "json",
     filename: `system-monitor-${history.range}-${Date.now()}.json`,
     contentType: "application/json",
-    data: JSON.stringify({ generatedAt, history, summary }, null, 2),
+    data: JSON.stringify({ generatedAt, history, summary, series, alerts, notifications }, null, 2),
     generatedAt,
   };
 }
@@ -2356,532 +2542,6 @@ async function writeState(dataDir, state) {
   await writeFile(path.join(dataDir, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`, "utf8");
 }
 
-function renderDashboardPanel(input = {}, context = {}, settings = normalizeSettings()) {
-  const aggregate = input.aggregate && typeof input.aggregate === "object" ? input.aggregate : {};
-  const results = Array.isArray(aggregate.results) ? aggregate.results : [];
-  const nodes = (results.length ? results : [{ node: context.runtime || { name: "Local node" }, ok: false, error: "No aggregate data available." }])
-    .map((item) => ({ ...item, stressScore: nodeStressScore(item) }))
-    .sort((a, b) => b.stressScore - a.stressScore);
-  const rangeState = panelRangeState(input);
-  const range = rangeState.range;
-  const maxPoints = numberInput(input.maxPoints, 240);
-  const autoRefreshMs = Math.max(1000, numberInput(input.autoRefreshMs, settings.autoRefreshMs));
-  const autoRefresh = input.autoRefresh === true || input.autoRefresh === "true";
-  const panels = nodes.map((item) => renderNodePanel(item, range)).join("");
-  return `<div class="stack" data-system-monitor data-range="${escapeHtml(rangeState.preset || "")}" data-range-ms="${rangeState.rangeMs ? escapeHtml(rangeState.rangeMs) : ""}" data-max-points="${escapeHtml(maxPoints)}" data-auto-refresh-ms="${escapeHtml(autoRefreshMs)}" data-auto-refresh-enabled="${autoRefresh ? "true" : "false"}">
-    <div class="section-header">
-      <div>
-        <h1>System Monitor <small>- ${escapeHtml(nodes.length)} node${nodes.length === 1 ? "" : "s"}</small></h1>
-        <small>SQLite-backed history with downsampled charts.</small>
-      </div>
-      <div class="row">
-        ${renderRangeButtons(rangeState.preset || "")}
-        <label class="row mini-control"><span>Custom minutes</span><input type="number" min="1" step="1" value="${rangeState.customMinutes ? escapeHtml(rangeState.customMinutes) : ""}" data-custom-minutes placeholder="90"></label>
-        <button type="button" class="secondary mini-button" data-custom-range-apply>Apply</button>
-        <label class="checkbox"><input type="checkbox" data-auto-refresh${autoRefresh ? " checked" : ""}> Auto refresh</label>
-        ${uiBadge(results.length ? "aggregate" : "local", results.length ? "enabled" : "warning")}
-      </div>
-    </div>
-    <div class="panel compact-panel">
-      <div class="row">
-        <label class="mini-control"><span>Filter nodes</span><input type="search" data-node-filter placeholder="name, host, platform"></label>
-        <label class="mini-control"><span>Sort</span><select data-node-sort><option value="stress">Stress</option><option value="cpu">CPU</option><option value="memory">Memory</option><option value="alerts">Alerts</option><option value="name">Name</option></select></label>
-        <label class="checkbox"><input type="checkbox" data-alerts-only> Show only alerts</label>
-        <button type="button" class="secondary mini-button" data-collapse-all>Collapse all</button>
-        <button type="button" class="secondary mini-button" data-expand-all>Expand all</button>
-      </div>
-    </div>
-    ${renderComparisonTable(nodes)}
-    ${panels || '<div class="empty-state">No monitor data available.</div>'}
-    ${panelScript()}
-  </div>`;
-}
-
-function panelRangeState(input = {}) {
-  if (input.rangeMs !== undefined && input.rangeMs !== null && input.rangeMs !== "") {
-    const rangeMs = Math.max(60_000, numberInput(input.rangeMs, RANGE_PRESETS[DEFAULT_RANGE]));
-    return { preset: "", range: `${Math.round(rangeMs / 60_000)}m`, rangeMs, customMinutes: Math.round(rangeMs / 60_000) };
-  }
-  const preset = RANGE_PRESETS[String(input.range || "")] ? String(input.range) : DEFAULT_RANGE;
-  return { preset, range: preset, rangeMs: 0, customMinutes: "" };
-}
-
-function renderRangeButtons(selected) {
-  return Object.keys(RANGE_PRESETS).map((range) => {
-    const active = range === selected ? "active" : "";
-    return `<button type="button" class="secondary mini-button ${active}" data-range-button="${escapeHtml(range)}">${escapeHtml(range)}</button>`;
-  }).join("");
-}
-
-function renderComparisonTable(nodes) {
-  const rows = nodes.map((item) => {
-    const panelData = item.result?.output?.panelData || item.result?.panelData || item.output?.panelData;
-    const sample = panelData?.current || item.result?.output?.sample || item.result?.sample || item.output?.sample;
-    const name = item.node?.name || sample?.node?.name || item.node?.id || "Node";
-    if (!item.ok || !sample) {
-      return `<tr><td>${escapeHtml(name)}</td><td colspan="6">${escapeHtml(item.error || "No data")}</td></tr>`;
-    }
-    const disk = primaryDisk(sample.disk);
-    const diskIo = diskIoSummary(sample.diskIo);
-    const history = panelData?.history || {};
-    const sparkline = renderSparkline(history.points || [], "cpuPercent", "#1d8a5b");
-    return `<tr>
-      <td>${escapeHtml(name)}</td>
-      <td>${escapeHtml(formatNumber(sample.cpu?.percent))}% ${sparkline}</td>
-      <td>${escapeHtml(formatNumber(sample.memory?.percent))}%</td>
-      <td>${escapeHtml(formatNumber(sample.memory?.swapPercent))}%</td>
-      <td>${escapeHtml(disk ? `${formatNumber(disk.percent)}%` : "-")}</td>
-      <td>${escapeHtml(formatBytes(diskIo.readBytesPerSec + diskIo.writeBytesPerSec))}/s</td>
-      <td>${escapeHtml(sample.alerts?.length || 0)}</td>
-    </tr>`;
-  }).join("");
-  return `<section class="panel">
-    <div class="section-header"><h2>Node comparison</h2><small>Sorted by current stress.</small></div>
-    <div class="data-table-wrap">
-      <table class="data-table">
-        <thead><tr><th>Node</th><th>CPU</th><th>Memory</th><th>Swap</th><th>Disk</th><th>I/O</th><th>Alerts</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="7">No nodes available.</td></tr>'}</tbody>
-      </table>
-    </div>
-  </section>`;
-}
-
-function renderSparkline(points, key, color) {
-  const rows = (Array.isArray(points) ? points : []).slice(-24).filter((point) => Number.isFinite(Number(point[key])));
-  if (rows.length < 2) return "";
-  const width = 80;
-  const height = 22;
-  const max = Math.max(1, ...rows.map((point) => Number(point[key]) || 0));
-  const d = rows.map((point, index) => {
-    const x = (index / Math.max(1, rows.length - 1)) * width;
-    const y = height - ((Number(point[key]) || 0) / max) * height;
-    return `${index ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
-  return `<svg class="sparkline" aria-hidden="true" viewBox="0 0 ${width} ${height}" width="80" height="22"><path d="${escapeHtml(d)}" fill="none" stroke="${escapeHtml(color)}" stroke-width="2"></path></svg>`;
-}
-
-function nodeStressScore(item) {
-  const panelData = item.result?.output?.panelData || item.result?.panelData || item.output?.panelData;
-  const sample = panelData?.current || item.result?.output?.sample || item.result?.sample || item.output?.sample;
-  if (!item.ok || !sample) return -1;
-  const disk = primaryDisk(sample.disk);
-  const diskIo = diskIoSummary(sample.diskIo);
-  return Math.max(
-    Number(sample.cpu?.percent) || 0,
-    Number(sample.memory?.percent) || 0,
-    Number(sample.memory?.swapPercent) || 0,
-    Number(sample.cpu?.breakdown?.iowait) || 0,
-    Number(disk?.percent) || 0,
-    Number(diskIo.maxBusyPercent) || 0,
-    (Number(sample.alerts?.length) || 0) * 100,
-  );
-}
-
-function renderNodePanel(item, range) {
-  const node = item.node || {};
-  if (!item.ok) {
-    return `<section class="panel" data-monitor-node-panel data-node-name="${escapeHtml(node.name || node.id || "Node")}" data-node-alerts="0" data-node-stress="-1" data-node-cpu="0" data-node-memory="0">
-      <div class="section-header"><h2>${escapeHtml(node.name || node.id || "Node")}</h2>${uiBadge("failed", "failed")}</div>
-      <div class="error-state">${escapeHtml(item.error || "Plugin unavailable")}</div>
-    </section>`;
-  }
-  const panelData = item.result?.output?.panelData || item.result?.panelData || item.output?.panelData;
-  const sample = panelData?.current || item.result?.output?.sample || item.result?.sample || item.output?.sample;
-  if (!sample) {
-    return `<section class="panel" data-monitor-node-panel data-node-name="${escapeHtml(node.name || node.id || "Node")}" data-node-alerts="0" data-node-stress="0" data-node-cpu="0" data-node-memory="0">
-      <div class="section-header"><h2>${escapeHtml(node.name || node.id || "Node")}</h2>${uiBadge("missing", "warning")}</div>
-      <div class="empty-state">No metrics sample returned.</div>
-    </section>`;
-  }
-  const disk = primaryDisk(sample.disk);
-  const network = Array.isArray(sample.network) ? sample.network.reduce((acc, row) => ({
-    rxBytesPerSec: acc.rxBytesPerSec + (Number(row.rxBytesPerSec) || 0),
-    txBytesPerSec: acc.txBytesPerSec + (Number(row.txBytesPerSec) || 0),
-  }), { rxBytesPerSec: 0, txBytesPerSec: 0 }) : null;
-  const diskIo = diskIoSummary(sample.diskIo);
-  const thermal = thermalSummary(sample.environment?.thermal);
-  const battery = sample.environment?.battery;
-  const history = panelData?.history || { points: [], disks: [], network: [] };
-  const summary = panelData?.summary || {};
-  const storage = panelData?.storage || {};
-  const title = node.name || sample.node?.name || node.id || "Node";
-  const alerts = Array.isArray(sample.alerts) ? sample.alerts : [];
-  return `<section class="panel" data-monitor-node-panel data-node-name="${escapeHtml(title)} ${escapeHtml(sample.node?.hostname || "")} ${escapeHtml(sample.node?.platform || node.platform || "")}" data-node-alerts="${escapeHtml(alerts.length)}" data-node-stress="${escapeHtml(nodeStressScore(item))}" data-node-cpu="${escapeHtml(sample.cpu?.percent || 0)}" data-node-memory="${escapeHtml(sample.memory?.percent || 0)}">
-    <div class="section-header">
-      <div>
-        <h2>${escapeHtml(title)}</h2>
-        <small>${escapeHtml([sample.node?.platform || node.platform || "", sample.node?.hostname || ""].filter(Boolean).join(" - "))}</small>
-      </div>
-      <div class="row">
-        ${alerts.length ? uiBadge(`${alerts.length} alert${alerts.length === 1 ? "" : "s"}`, "warning") : uiBadge("ok", "enabled")}
-        <button type="button" class="secondary mini-button" data-node-collapse>Collapse</button>
-      </div>
-    </div>
-    <div data-node-body>
-      ${renderAlerts(alerts)}
-      <div class="metrics-grid">
-      ${metricCard("CPU", `${formatNumber(sample.cpu?.percent)}%`, progressBar(sample.cpu?.percent))}
-      ${metricCard("CPU load", formatLoadAverage(sample.cpu), "<small>1m / 5m / 15m</small>")}
-      ${metricCard("CPU breakdown", formatCpuBreakdown(sample.cpu?.breakdown), `<small>user / sys / iowait</small>`)}
-      ${metricCard("Real memory", formatMemoryMain(sample.memory), `${progressBar(sample.memory?.percent)}<small>${escapeHtml(formatMemoryDetail(sample.memory))}</small>`)}
-      ${metricCard("Swap", formatSwapMain(sample.memory), `${progressBar(sample.memory?.swapPercent)}<small>${escapeHtml(formatSwapDetail(sample.memory))}</small>`)}
-      ${metricCard("Local disk", disk ? formatDiskMain(disk) : "-", disk ? `${progressBar(disk.percent)}<small>${escapeHtml(formatDiskDetail(disk))}</small>` : "")}
-      ${metricCard("Disk I/O", `${formatBytes(diskIo.readBytesPerSec)}/s read`, `<small>${formatBytes(diskIo.writeBytesPerSec)}/s write - ${formatNumber(diskIo.maxBusyPercent)}% busy</small>`)}
-      ${metricCard("Network", `${formatBytes(network?.rxBytesPerSec || 0)}/s down`, `<small>${formatBytes(network?.txBytesPerSec || 0)}/s up</small>`)}
-      ${metricCard("Network health", formatNetworkHealth(sample.networkHealth), `<small>${escapeHtml(formatNetworkDrops(sample.networkHealth))}</small>`)}
-      ${metricCard("Pressure", formatPressure(sample.memory?.pressure), `<small>some / full avg10</small>`)}
-      ${metricCard("Thermals", Number.isFinite(thermal.maxCelsius) ? `${formatNumber(thermal.maxCelsius)}C` : "-", `<small>${escapeHtml(battery ? `Battery ${formatNumber(battery.percent)}% ${battery.status || ""}` : "No battery")}</small>`)}
-      </div>
-      ${renderProcessTable(sample.processes || [])}
-      ${renderCollectorDiagnostics(sample.collectors || [])}
-      ${renderAlertHistory(panelData?.alerts?.events || [])}
-      <div class="stack metrics-chart-stack">
-      ${renderLineChart("CPU and memory - " + range, history.points || [], [
-        { key: "cpuPercent", label: "CPU", color: "#1d8a5b", max: 100 },
-        { key: "memoryPercent", label: "Memory", color: "#f2c94c", max: 100 },
-        { key: "swapPercent", label: "Swap", color: "#9b1c1c", max: 100 },
-      ], "%")}
-      ${renderLineChart("CPU breakdown - " + range, history.points || [], [
-        { key: "cpuSystemPercent", label: "System", color: "#2f80ed", max: 100 },
-        { key: "cpuIowaitPercent", label: "I/O wait", color: "#f2994a", max: 100 },
-        { key: "cpuStealPercent", label: "Steal", color: "#9b51e0", max: 100 },
-      ], "%")}
-      ${renderLineChart("Total disk and network throughput - " + range, history.points || [], [
-        { key: "diskReadBytesPerSec", label: "Disk read", color: "#1d8a5b" },
-        { key: "diskWriteBytesPerSec", label: "Disk write", color: "#235c42" },
-        { key: "rxBytesPerSec", label: "Net down", color: "#2f80ed" },
-        { key: "txBytesPerSec", label: "Net up", color: "#56ccf2" },
-      ], "B/s", (value) => `${formatBytes(value)}/s`)}
-      ${renderDiskCharts(history.disks || [])}
-      ${renderDiskIoCharts(history.diskIo || [])}
-      ${renderNetworkCharts(history.network || [])}
-      </div>
-      <div class="data-table-wrap">
-      <table class="data-table">
-        <thead><tr><th>Metric</th><th>Value</th><th>Detail</th></tr></thead>
-        <tbody>
-          <tr><td>Samples</td><td>${escapeHtml(summary.samples ?? 0)}</td><td>${escapeHtml(formatTimeRange(history.fromMs, history.toMs))}</td></tr>
-          <tr><td>CPU range</td><td>${escapeHtml(formatNumber(summary.cpu?.min))}% - ${escapeHtml(formatNumber(summary.cpu?.max))}%</td><td>avg ${escapeHtml(formatNumber(summary.cpu?.avg))}%</td></tr>
-          <tr><td>CPU load average</td><td>${escapeHtml(formatLoadAverage(sample.cpu))}</td><td>1m / 5m / 15m</td></tr>
-          <tr><td>CPU iowait</td><td>${escapeHtml(formatNumber(summary.cpuIowait?.max))}% max</td><td>avg ${escapeHtml(formatNumber(summary.cpuIowait?.avg))}%</td></tr>
-          <tr><td>CPU cores</td><td>${escapeHtml(sample.cpu?.perCore?.length || 0)} cores</td><td>${escapeHtml(formatTopCores(sample.cpu?.perCore))}</td></tr>
-          <tr><td>Memory range</td><td>${escapeHtml(formatNumber(summary.memory?.min))}% - ${escapeHtml(formatNumber(summary.memory?.max))}%</td><td>avg ${escapeHtml(formatNumber(summary.memory?.avg))}%</td></tr>
-          <tr><td>Swap range</td><td>${escapeHtml(formatNumber(summary.swap?.min))}% - ${escapeHtml(formatNumber(summary.swap?.max))}%</td><td>avg ${escapeHtml(formatNumber(summary.swap?.avg))}%</td></tr>
-          <tr><td>Page faults</td><td>${escapeHtml(formatNumber(sample.memory?.pageFaultsPerSec))}/s</td><td>major ${escapeHtml(formatNumber(sample.memory?.majorPageFaultsPerSec))}/s</td></tr>
-          <tr><td>Real memory</td><td>${escapeHtml(formatMemoryMain(sample.memory))}</td><td>${escapeHtml(formatMemoryDetail(sample.memory))}</td></tr>
-          <tr><td>Local disk</td><td>${escapeHtml(disk ? formatDiskMain(disk) : "-")}</td><td>${escapeHtml(disk ? formatDiskDetail(disk) : "No disk data collected")}</td></tr>
-          <tr><td>Inodes</td><td>${escapeHtml(disk ? formatNumber(disk.inodesPercent) : "0")}%</td><td>${escapeHtml(disk ? formatInodeDetail(disk) : "No inode data collected")}</td></tr>
-          <tr><td>Disk I/O</td><td>${escapeHtml(formatBytes(summary.diskIo?.maxReadBytesPerSec || 0))}/s max read</td><td>${escapeHtml(formatBytes(summary.diskIo?.maxWriteBytesPerSec || 0))}/s max write - ${escapeHtml(formatNumber(summary.diskIo?.maxBusyPercent))}% busy</td></tr>
-          <tr><td>Network errors</td><td>${escapeHtml(sample.networkHealth?.errors || 0)} errors</td><td>${escapeHtml(sample.networkHealth?.drops || 0)} drops - retransmits ${escapeHtml(formatNumber(sample.networkHealth?.tcpRetransmitsPerSec))}/s</td></tr>
-          <tr><td>Storage</td><td>${escapeHtml(formatBytes(storage.sizeBytes || 0))}</td><td>${escapeHtml(storage.samples || 0)} samples retained ${escapeHtml(storage.retentionDays || "")}d</td></tr>
-        </tbody>
-      </table>
-      </div>
-      <small>Last sample ${escapeHtml(sample.timestamp || "")}</small>
-    </div>
-  </section>`;
-}
-
-function primaryDisk(disks) {
-  if (!Array.isArray(disks) || !disks.length) return null;
-  const usable = disks.filter((disk) => Number(disk?.totalBytes) > 0);
-  if (!usable.length) return null;
-  const preferred = usable.find((disk) => disk.mount === "/")
-    || usable.find((disk) => /^[A-Z]:\\?$/i.test(String(disk.mount || "")))
-    || usable.find((disk) => String(disk.mount || "").toLowerCase() === "/system/volumes/data")
-    || usable.find((disk) => String(disk.mount || "").toLowerCase() === "/users")
-    || null;
-  return preferred || [...usable].sort((a, b) => (Number(b.totalBytes) || 0) - (Number(a.totalBytes) || 0))[0];
-}
-
-function renderProcessTable(processes = []) {
-  const rows = (Array.isArray(processes) ? processes : []).slice(0, 10).map((process) => `<tr>
-    <td>${process.agent ? uiBadge("agent", "enabled") : ""} ${escapeHtml(process.name || "process")}</td>
-    <td>${escapeHtml(process.pid || "-")}</td>
-    <td>${escapeHtml(formatNumber(process.cpuPercent))}%</td>
-    <td>${escapeHtml(formatBytes(process.rssBytes || 0))}</td>
-    <td><span title="${escapeHtml(process.command || "")}">${escapeHtml(shortText(process.command || "", 90))}</span></td>
-  </tr>`).join("");
-  return `<div class="data-table-wrap">
-    <table class="data-table">
-      <thead><tr><th>Top process</th><th>PID</th><th>CPU</th><th>Memory</th><th>Command</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="5">No process data collected.</td></tr>'}</tbody>
-    </table>
-  </div>`;
-}
-
-function renderCollectorDiagnostics(collectors = []) {
-  const rows = (Array.isArray(collectors) ? collectors : []).map((collector) => `<tr>
-    <td>${escapeHtml(collector.name || "-")}</td>
-    <td>${collector.ok ? uiBadge("ok", "enabled") : uiBadge("failed", "failed")}</td>
-    <td>${escapeHtml(collector.durationMs || 0)}ms</td>
-    <td>${escapeHtml(collector.failures || 0)}</td>
-    <td>${escapeHtml(collector.lastError || "")}</td>
-  </tr>`).join("");
-  return `<details class="panel-details"><summary>Collector diagnostics (${escapeHtml((collectors || []).length)})</summary>
-    <div class="data-table-wrap">
-      <table class="data-table">
-        <thead><tr><th>Collector</th><th>Status</th><th>Duration</th><th>Failures</th><th>Last error</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="5">No collector diagnostics.</td></tr>'}</tbody>
-      </table>
-    </div>
-  </details>`;
-}
-
-function renderAlertHistory(alerts = []) {
-  const rows = (Array.isArray(alerts) ? alerts : []).slice(0, 20).map((alert) => `<tr>
-    <td>${escapeHtml(alert.timestamp || "")}</td>
-    <td>${uiBadge(alert.level || "warning", alert.level === "critical" ? "failed" : "warning")}</td>
-    <td>${escapeHtml(alert.label || "")}</td>
-    <td>${escapeHtml(formatNumber(alert.value))}${escapeHtml(alert.unit || "")}</td>
-    <td>${escapeHtml(formatNumber(alert.threshold))}${escapeHtml(alert.unit || "")}</td>
-  </tr>`).join("");
-  return `<details class="panel-details"><summary>Alert history (${escapeHtml((alerts || []).length)})</summary>
-    <div class="data-table-wrap">
-      <table class="data-table">
-        <thead><tr><th>Time</th><th>Level</th><th>Alert</th><th>Value</th><th>Threshold</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="5">No alerts in this range.</td></tr>'}</tbody>
-      </table>
-    </div>
-  </details>`;
-}
-
-function renderAlerts(alerts) {
-  if (!Array.isArray(alerts) || !alerts.length) return "";
-  const items = alerts.map((alert) => `<span class="chip ${alert.level === "critical" ? "error" : "warn"}">${escapeHtml(alert.label)} ${escapeHtml(formatNumber(alert.value))}${escapeHtml(alert.unit || "")}</span>`).join("");
-  return `<div class="row">${items}</div>`;
-}
-
-function renderDiskCharts(disks) {
-  if (!Array.isArray(disks) || !disks.length) return "";
-  const charts = disks.slice(0, 4).map((disk, index) => `<div data-selectable-chart="disk" data-chart-index="${index}"${index ? ' hidden' : ""}>${renderLineChart(`Disk ${disk.mount || disk.filesystem || ""}`, disk.points || [], [
-    { key: "percent", label: "Used", color: "#9b1c1c", max: 100 },
-  ], "%")}</div>`).join("");
-  return renderChartSelector("disk", disks.slice(0, 4).map((disk) => disk.mount || disk.filesystem || "disk"), charts);
-}
-
-function renderDiskIoCharts(disks) {
-  if (!Array.isArray(disks) || !disks.length) return "";
-  const charts = disks.slice(0, 4).map((disk, index) => `<div data-selectable-chart="disk-io" data-chart-index="${index}"${index ? ' hidden' : ""}>${renderLineChart(`Disk I/O ${disk.name || ""}`, disk.points || [], [
-    { key: "readBytesPerSec", label: "Read", color: "#1d8a5b" },
-    { key: "writeBytesPerSec", label: "Write", color: "#235c42" },
-  ], "B/s", (value) => `${formatBytes(value)}/s`)}</div>`).join("");
-  return renderChartSelector("disk-io", disks.slice(0, 4).map((disk) => disk.name || "disk"), charts);
-}
-
-function renderNetworkCharts(network) {
-  if (!Array.isArray(network) || !network.length) return "";
-  const charts = network.slice(0, 4).map((item, index) => `<div data-selectable-chart="network" data-chart-index="${index}"${index ? ' hidden' : ""}>${renderLineChart(`Network ${item.name || ""}`, item.points || [], [
-    { key: "rxBytesPerSec", label: "Down", color: "#1d8a5b" },
-    { key: "txBytesPerSec", label: "Up", color: "#235c42" },
-  ], "B/s", (value) => `${formatBytes(value)}/s`)}</div>`).join("");
-  return renderChartSelector("network", network.slice(0, 4).map((item) => item.name || "interface"), charts);
-}
-
-function renderChartSelector(type, labels, charts) {
-  if (labels.length <= 1) return charts;
-  const options = labels.map((label, index) => `<option value="${index}">${escapeHtml(label)}</option>`).join("");
-  return `<div class="panel">
-    <div class="section-header"><h3>${escapeHtml(type === "network" ? "Network interfaces" : type === "disk-io" ? "Disk I/O devices" : "Disks")}</h3><select data-chart-selector="${escapeHtml(type)}">${options}</select></div>
-    ${charts}
-  </div>`;
-}
-
-function renderLineChart(title, points, series, unit = "", formatter = (value) => `${formatNumber(value)}${unit}`) {
-  const width = 760;
-  const height = 180;
-  const pad = { left: 42, right: 14, top: 24, bottom: 28 };
-  const rows = Array.isArray(points) ? points.filter((point) => Number.isFinite(Number(point.timestamp))) : [];
-  if (!rows.length) {
-    return `<div class="panel"><h3>${escapeHtml(title)}</h3><div class="empty-state">No history for this range.</div></div>`;
-  }
-  const minTs = Math.min(...rows.map((point) => Number(point.timestamp)));
-  const maxTs = Math.max(...rows.map((point) => Number(point.timestamp)));
-  const values = rows.flatMap((point) => series.map((line) => Number(point[line.key]) || 0));
-  const configuredMax = Math.max(...series.map((line) => Number(line.max) || 0));
-  const maxValue = Math.max(configuredMax, ...values, 1);
-  const x = (timestamp) => pad.left + ((Number(timestamp) - minTs) / Math.max(1, maxTs - minTs)) * (width - pad.left - pad.right);
-  const y = (value) => pad.top + (1 - (Number(value) || 0) / maxValue) * (height - pad.top - pad.bottom);
-  const paths = series.map((line) => {
-    const d = rows.map((point, index) => `${index === 0 ? "M" : "L"}${x(point.timestamp).toFixed(1)},${y(point[line.key]).toFixed(1)}`).join(" ");
-    return `<path d="${escapeHtml(d)}" fill="none" stroke="${escapeHtml(line.color)}" stroke-width="2.2" vector-effect="non-scaling-stroke"><title>${escapeHtml(line.label)}</title></path>`;
-  }).join("");
-  const hitAreas = rows.map((point, index) => {
-    const currentX = x(point.timestamp);
-    const previousX = index > 0 ? x(rows[index - 1].timestamp) : pad.left;
-    const nextX = index < rows.length - 1 ? x(rows[index + 1].timestamp) : width - pad.right;
-    const left = index > 0 ? (previousX + currentX) / 2 : pad.left;
-    const right = index < rows.length - 1 ? (currentX + nextX) / 2 : width - pad.right;
-    const tooltip = chartTooltip(point, series, formatter);
-    return `<rect class="chart-hit" tabindex="0" role="img" aria-label="${escapeHtml(tooltip)}" data-chart-tooltip="${escapeHtml(tooltip).replace(/\n/g, "&#10;")}" x="${left.toFixed(1)}" y="${pad.top}" width="${Math.max(2, right - left).toFixed(1)}" height="${height - pad.top - pad.bottom}" fill="transparent" pointer-events="all"><title>${escapeHtml(tooltip)}</title></rect>`;
-  }).join("");
-  const legend = series.map((line) => `<span class="chip chart-legend-item"><svg class="chart-legend-dot" aria-hidden="true" viewBox="0 0 9 9" width="9" height="9"><circle cx="4.5" cy="4.5" r="4.5" fill="${escapeHtml(line.color)}"></circle></svg>${escapeHtml(line.label)}</span>`).join("");
-  const latest = rows.at(-1) || {};
-  const latestText = series.map((line) => `${line.label}: ${formatter(Number(latest[line.key]) || 0)}`).join(" | ");
-  return `<div class="panel">
-    <div class="section-header"><h3>${escapeHtml(title)}</h3><small>${escapeHtml(latestText)}</small></div>
-    <div class="chart-wrap" data-chart-wrap>
-      <span class="chart-axis-label chart-axis-label-top">${escapeHtml(formatter(maxValue))}</span>
-      <span class="chart-axis-label chart-axis-label-bottom">0</span>
-      <svg role="img" aria-label="${escapeHtml(title)} chart" viewBox="0 0 ${width} ${height}" width="100%" height="180" preserveAspectRatio="none">
-        <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
-        <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="currentColor" opacity="0.18"></line>
-        <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="currentColor" opacity="0.18"></line>
-        ${paths}
-        ${hitAreas}
-      </svg>
-      <div class="chart-tooltip" data-chart-tooltip-popup hidden></div>
-    </div>
-    <div class="row chart-legend">${legend}</div>
-    <small class="chart-tooltip-note">Hover the chart for exact values.</small>
-  </div>`;
-}
-
-function chartTooltip(point, series, formatter) {
-  const lines = [new Date(Number(point.timestamp)).toLocaleString()];
-  for (const line of series) {
-    lines.push(`${line.label}: ${formatter(Number(point[line.key]) || 0)}`);
-  }
-  return lines.join("\n");
-}
-
-function metricCard(label, value, body = "") {
-  return `<div class="metric"><div class="metric-label">${escapeHtml(label)}</div><div class="metric-value">${escapeHtml(value)}</div>${body}</div>`;
-}
-
-function metricRow(label, value, suffix) {
-  const number = Number(value) || 0;
-  return `<div class="metric-row"><span>${escapeHtml(label)}</span><span><span class="metric-kv-number">${number.toFixed(1)}${escapeHtml(suffix)}</span>${progressBar(number)}</span></div>`;
-}
-
-function progressBar(value) {
-  const number = Number(value) || 0;
-  const cls = number >= 90 ? "error" : number >= 75 ? "warn" : "";
-  const width = Math.max(0, Math.min(100, number));
-  const color = cls === "error" ? "var(--danger)" : cls === "warn" ? "var(--warn-text)" : "var(--success)";
-  return `<svg class="progress-svg ${cls}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${width}" viewBox="0 0 100 7" preserveAspectRatio="none"><rect class="progress-track" x="0" y="0" width="100" height="7" rx="3.5"></rect><rect class="progress-fill" x="0" y="0" width="${width}" height="7" rx="3.5" fill="${color}"></rect></svg>`;
-}
-
-function panelScript() {
-  return `<script>
-(function(){
-  var root=document.currentScript.closest('[data-system-monitor]');
-  if(!root)return;
-  function autoRefreshEnabled(){
-    var checkbox=root.querySelector('[data-auto-refresh]');
-    return !!(checkbox&&checkbox.checked);
-  }
-  function input(range){
-    var payload={maxPoints:Number(root.dataset.maxPoints)||240,autoRefresh:autoRefreshEnabled(),autoRefreshMs:Number(root.dataset.autoRefreshMs)||10000};
-    if(range){payload.range=range;return payload;}
-    if(root.dataset.rangeMs){payload.rangeMs=Number(root.dataset.rangeMs)||3600000;return payload;}
-    payload.range=root.dataset.range||'${DEFAULT_RANGE}';
-    return payload;
-  }
-  root.querySelectorAll('[data-range-button]').forEach(function(button){
-    button.addEventListener('click',function(){window.NordRelayPanel&&window.NordRelayPanel.reload&&window.NordRelayPanel.reload(input(button.dataset.rangeButton));});
-  });
-  var customApply=root.querySelector('[data-custom-range-apply]');
-  var customMinutes=root.querySelector('[data-custom-minutes]');
-  if(customApply&&customMinutes)customApply.addEventListener('click',function(){
-    var minutes=Math.max(1,Number(customMinutes.value)||0);
-    if(minutes&&window.NordRelayPanel&&window.NordRelayPanel.reload)window.NordRelayPanel.reload({rangeMs:minutes*60000,maxPoints:Number(root.dataset.maxPoints)||240,autoRefresh:autoRefreshEnabled(),autoRefreshMs:Number(root.dataset.autoRefreshMs)||10000});
-  });
-  function applyNodeFilters(){
-    var text=(root.querySelector('[data-node-filter]')&&root.querySelector('[data-node-filter]').value||'').toLowerCase();
-    var alertsOnly=!!(root.querySelector('[data-alerts-only]')&&root.querySelector('[data-alerts-only]').checked);
-    var sort=(root.querySelector('[data-node-sort]')&&root.querySelector('[data-node-sort]').value)||'stress';
-    var panels=Array.prototype.slice.call(root.querySelectorAll('[data-monitor-node-panel]'));
-    panels.sort(function(a,b){
-      if(sort==='name')return String(a.dataset.nodeName||'').localeCompare(String(b.dataset.nodeName||''));
-      if(sort==='cpu')return (Number(b.dataset.nodeCpu)||0)-(Number(a.dataset.nodeCpu)||0);
-      if(sort==='memory')return (Number(b.dataset.nodeMemory)||0)-(Number(a.dataset.nodeMemory)||0);
-      if(sort==='alerts')return (Number(b.dataset.nodeAlerts)||0)-(Number(a.dataset.nodeAlerts)||0);
-      return (Number(b.dataset.nodeStress)||0)-(Number(a.dataset.nodeStress)||0);
-    }).forEach(function(panel){panel.parentNode&&panel.parentNode.appendChild(panel);});
-    panels.forEach(function(panel){
-      var match=!text||String(panel.dataset.nodeName||'').toLowerCase().indexOf(text)!==-1;
-      var hasAlerts=(Number(panel.dataset.nodeAlerts)||0)>0;
-      panel.hidden=!match||(alertsOnly&&!hasAlerts);
-    });
-  }
-  ['input','change'].forEach(function(eventName){
-    root.querySelectorAll('[data-node-filter],[data-node-sort],[data-alerts-only]').forEach(function(control){control.addEventListener(eventName,applyNodeFilters);});
-  });
-  root.querySelectorAll('[data-node-collapse]').forEach(function(button){
-    button.addEventListener('click',function(){
-      var panel=button.closest('[data-monitor-node-panel]');
-      var body=panel&&panel.querySelector('[data-node-body]');
-      if(!body)return;
-      body.hidden=!body.hidden;
-      button.textContent=body.hidden?'Expand':'Collapse';
-    });
-  });
-  var collapseAll=root.querySelector('[data-collapse-all]');
-  var expandAll=root.querySelector('[data-expand-all]');
-  if(collapseAll)collapseAll.addEventListener('click',function(){root.querySelectorAll('[data-node-body]').forEach(function(body){body.hidden=true;});root.querySelectorAll('[data-node-collapse]').forEach(function(button){button.textContent='Expand';});});
-  if(expandAll)expandAll.addEventListener('click',function(){root.querySelectorAll('[data-node-body]').forEach(function(body){body.hidden=false;});root.querySelectorAll('[data-node-collapse]').forEach(function(button){button.textContent='Collapse';});});
-  root.querySelectorAll('[data-chart-selector]').forEach(function(select){
-    select.addEventListener('change',function(){
-      var type=select.dataset.chartSelector;
-      hideChartTooltips();
-      root.querySelectorAll('[data-selectable-chart="'+type+'"]').forEach(function(chart){
-        chart.hidden=chart.dataset.chartIndex!==select.value;
-      });
-    });
-  });
-  function tooltipFor(target){
-    var chart=target.closest('[data-chart-wrap]');
-    return chart?chart.querySelector('[data-chart-tooltip-popup]'):null;
-  }
-  function positionTooltip(target,event){
-    var tooltip=tooltipFor(target);
-    var chart=target.closest('[data-chart-wrap]');
-    if(!tooltip||!chart)return;
-    var rect=chart.getBoundingClientRect();
-    var x=event&&Number.isFinite(event.clientX)?event.clientX-rect.left:Number(target.getAttribute('x')||0);
-    var y=event&&Number.isFinite(event.clientY)?event.clientY-rect.top:Number(target.getAttribute('y')||0);
-    var tooltipWidth=Math.min(280,tooltip.offsetWidth||220);
-    var left=Math.max(8,Math.min(Math.max(8,rect.width-tooltipWidth-8),x+12));
-    var top=Math.max(8,y+12);
-    if(top+(tooltip.offsetHeight||60)>rect.height-8)top=Math.max(8,y-(tooltip.offsetHeight||60)-12);
-    tooltip.style.left=left+'px';
-    tooltip.style.top=top+'px';
-  }
-  function showTooltip(target,event){
-    var tooltip=tooltipFor(target);
-    var value=target.getAttribute('data-chart-tooltip');
-    if(!tooltip||!value)return;
-    tooltip.textContent=value;
-    tooltip.hidden=false;
-    positionTooltip(target,event);
-  }
-  function hideTooltip(target){
-    var tooltip=tooltipFor(target);
-    if(tooltip)tooltip.hidden=true;
-  }
-  function hideChartTooltips(){
-    root.querySelectorAll('[data-chart-tooltip-popup]').forEach(function(tooltip){tooltip.hidden=true;});
-  }
-  root.querySelectorAll('.chart-hit').forEach(function(hit){
-    hit.addEventListener('pointerenter',function(event){showTooltip(hit,event);});
-    hit.addEventListener('pointermove',function(event){positionTooltip(hit,event);});
-    hit.addEventListener('pointerleave',function(){hideTooltip(hit);});
-    hit.addEventListener('focus',function(){showTooltip(hit);});
-    hit.addEventListener('blur',function(){hideTooltip(hit);});
-  });
-  var timer=null;
-  var checkbox=root.querySelector('[data-auto-refresh]');
-  function stop(){if(timer){clearInterval(timer);timer=null;}}
-  function start(){stop();timer=setInterval(function(){if(document.visibilityState==='visible'&&window.NordRelayPanel&&window.NordRelayPanel.reload)window.NordRelayPanel.reload(input(root.dataset.range));},Number(root.dataset.autoRefreshMs)||10000);}
-  if(checkbox)checkbox.addEventListener('change',function(){checkbox.checked?start():stop();});
-  window.addEventListener('pagehide',stop);
-  if(checkbox&&checkbox.checked)start();
-  applyNodeFilters();
-  if(window.NordRelayPanel&&window.NordRelayPanel.ready)window.NordRelayPanel.ready();
-})();</script>`;
-}
-
 function normalizeSettings(settings = {}) {
   const thresholds = {
     cpuPercent: numberInput(settings.thresholdCpuPercent, DEFAULT_THRESHOLDS.cpuPercent),
@@ -2895,6 +2555,10 @@ function normalizeSettings(settings = {}) {
   const silencedAlertLabels = String(settings.silencedAlertLabels || "").split(",").map((item) => item.trim()).filter(Boolean);
   return {
     sampleIntervalMs: numberInput(settings.sampleIntervalMs, 5000),
+    diskSampleIntervalMs: numberInput(settings.diskSampleIntervalMs, 15_000),
+    processSampleIntervalMs: numberInput(settings.processSampleIntervalMs, 15_000),
+    thermalSampleIntervalMs: numberInput(settings.thermalSampleIntervalMs, 30_000),
+    batterySampleIntervalMs: numberInput(settings.batterySampleIntervalMs, 30_000),
     retentionDays: numberInput(settings.retentionDays, 30),
     maxChartPoints: numberInput(settings.maxChartPoints, 240),
     cleanupIntervalMinutes: numberInput(settings.cleanupIntervalMinutes, 30),
@@ -2907,6 +2571,9 @@ function normalizeSettings(settings = {}) {
     trackBattery: settings.trackBattery !== false && settings.trackBattery !== "false",
     trackProcesses: settings.trackProcesses !== false && settings.trackProcesses !== "false",
     maxProcesses: Math.max(1, Math.min(50, Math.round(numberInput(settings.maxProcesses, 10)))),
+    alertCooldownMinutes: numberInput(settings.alertCooldownMinutes, 15),
+    alertAcknowledgeMinutes: numberInput(settings.alertAcknowledgeMinutes, 60),
+    alertChannel: String(settings.alertChannel || "nordrelay"),
     silencedAlertLabels,
     thresholds,
   };
@@ -2931,34 +2598,6 @@ function requirePermission(request, permission) {
 
 function writeResult(result) {
   process.stdout.write(`${JSON.stringify(result)}\n`);
-}
-
-function collectMetric(name, fallback, collector, previousCollectors = {}, collectorDiagnostics = []) {
-  const started = Date.now();
-  const previous = previousCollectors?.[name] || {};
-  try {
-    const value = collector();
-    collectorDiagnostics.push({
-      name,
-      ok: true,
-      durationMs: Date.now() - started,
-      failures: 0,
-      lastError: "",
-      checkedAt: new Date().toISOString(),
-    });
-    return value;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    collectorDiagnostics.push({
-      name,
-      ok: false,
-      durationMs: Date.now() - started,
-      failures: (Number(previous.failures) || 0) + 1,
-      lastError: message.slice(0, 240),
-      checkedAt: new Date().toISOString(),
-    });
-    return fallback;
-  }
 }
 
 function run(command, args) {

@@ -38,7 +38,9 @@ plugin on all reachable peers without logging into each peer separately.
 ## Capabilities
 
 - Collector: `system.sample`
-- Commands: `sample`, `latest`, `history`, `panel-data`, `series`, `summary`, `alerts`, `export`, `status`, `storage`, `cleanup`, `vacuum`
+- Commands: `sample`, `latest`, `history`, `panel-data`, `series`, `summary`,
+  `alerts`, `notifications`, `ack-alert`, `export`, `status`, `storage`,
+  `storage-health`, `checkpoint`, `cleanup`, `vacuum`, `rebuild-rollups`
 - Web panel: `dashboard`
 - Diagnostics: enabled
 
@@ -66,6 +68,10 @@ SQLite rollups instead of repeatedly aggregating all raw samples.
 | Setting | Default | Description |
 | --- | ---: | --- |
 | `sampleIntervalMs` | `5000` | Preferred collector interval in milliseconds |
+| `diskSampleIntervalMs` | `15000` | Minimum milliseconds between disk usage collector runs |
+| `processSampleIntervalMs` | `15000` | Minimum milliseconds between top-process collector runs |
+| `thermalSampleIntervalMs` | `30000` | Minimum milliseconds between thermal collector runs |
+| `batterySampleIntervalMs` | `30000` | Minimum milliseconds between battery collector runs |
 | `retentionDays` | `30` | Metrics history retention in days |
 | `maxChartPoints` | `240` | Maximum downsampled points returned for charts |
 | `cleanupIntervalMinutes` | `30` | Minimum time between automatic retention cleanup runs |
@@ -79,6 +85,9 @@ SQLite rollups instead of repeatedly aggregating all raw samples.
 | `trackProcesses` | `true` | Collect top CPU/RAM processes and mark known coding agents |
 | `maxProcesses` | `10` | Maximum number of top processes stored per sample |
 | `silencedAlertLabels` | `""` | Comma-separated alert labels to suppress |
+| `alertCooldownMinutes` | `15` | Minimum minutes between notification events for the same alert and node |
+| `alertAcknowledgeMinutes` | `60` | Default minutes used by `ack-alert` |
+| `alertChannel` | `nordrelay` | Logical channel stored with alert notification events |
 | `thresholdCpuPercent` | `90` | CPU alert threshold |
 | `thresholdMemoryPercent` | `90` | Memory alert threshold |
 | `thresholdDiskPercent` | `90` | Disk and inode alert threshold |
@@ -101,10 +110,14 @@ The plugin writes:
 - `state.json`
 
 `metrics.sqlite` contains samples, disk rows, disk I/O rows, network rows,
-per-core CPU rows, alert events, core rollups, disk rollups, disk I/O rollups,
-and network rollups with indexes for range queries. `state.json` only keeps
-lightweight counter snapshots and collector status needed to calculate CPU,
-disk, memory, and network rates between samples.
+per-core CPU rows, alert events, notification events, core rollups, disk
+rollups, disk I/O rollups, and network rollups with indexes for range queries.
+`state.json` only keeps lightweight counter snapshots, collector cache entries,
+alert acknowledgements, and collector status needed to calculate CPU, disk,
+memory, and network rates between samples.
+
+Disk, process, thermal, and battery collectors are cached independently so
+expensive probes do not have to run on every scheduler tick.
 
 Useful commands:
 
@@ -112,10 +125,16 @@ Useful commands:
 nordrelay plugin invoke system-monitor command panel-data --input-json '{"range":"24h","maxPoints":300}'
 nordrelay plugin invoke system-monitor command summary --input-json '{"range":"7d"}'
 nordrelay plugin invoke system-monitor command alerts --input-json '{"range":"24h","limit":100}'
+nordrelay plugin invoke system-monitor command notifications --input-json '{"range":"24h","markDelivered":true}'
+nordrelay plugin invoke system-monitor command ack-alert --input-json '{"label":"Memory","nodeId":"*","untilMinutes":60}'
 nordrelay plugin invoke system-monitor command export --input-json '{"format":"csv","range":"30d","maxPoints":1000}'
+nordrelay plugin invoke system-monitor command export --input-json '{"format":"jsonl","range":"24h","nodeId":"local"}'
 nordrelay plugin invoke system-monitor command storage
+nordrelay plugin invoke system-monitor command storage-health
+nordrelay plugin invoke system-monitor command checkpoint --input-json '{"mode":"TRUNCATE"}'
 nordrelay plugin invoke system-monitor command cleanup
 nordrelay plugin invoke system-monitor command vacuum
+nordrelay plugin invoke system-monitor command rebuild-rollups
 ```
 
 ## Development
@@ -124,3 +143,6 @@ nordrelay plugin invoke system-monitor command vacuum
 npm run check
 npm test
 ```
+
+Set `NORDRELAY_PLUGIN_HOST_SMOKE=1` to include the optional local NordRelay
+plugin-host smoke test.

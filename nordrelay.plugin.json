@@ -134,9 +134,68 @@
         "timeoutMs": 5000
       },
       {
+        "name": "notifications",
+        "title": "Pending alert notifications",
+        "description": "Return queued alert notifications, optionally marking them delivered.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "range": {
+              "type": "string",
+              "title": "Range",
+              "default": "24h"
+            },
+            "limit": {
+              "type": "number",
+              "title": "Limit",
+              "default": 100
+            },
+            "includeDelivered": {
+              "type": "boolean",
+              "title": "Include delivered",
+              "default": false
+            },
+            "markDelivered": {
+              "type": "boolean",
+              "title": "Mark returned notifications delivered",
+              "default": false
+            }
+          }
+        },
+        "timeoutMs": 5000
+      },
+      {
+        "name": "ack-alert",
+        "title": "Acknowledge alert",
+        "description": "Temporarily suppress one alert label for a node or for all nodes.",
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "label"
+          ],
+          "properties": {
+            "label": {
+              "type": "string",
+              "title": "Alert label"
+            },
+            "nodeId": {
+              "type": "string",
+              "title": "Node ID",
+              "default": "*"
+            },
+            "untilMinutes": {
+              "type": "number",
+              "title": "Minutes",
+              "default": 60
+            }
+          }
+        },
+        "timeoutMs": 3000
+      },
+      {
         "name": "export",
         "title": "Export metrics",
-        "description": "Export downsampled metrics history as JSON or CSV.",
+        "description": "Export metrics as JSON, JSONL, or CSV with optional alert and notification data.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -144,6 +203,14 @@
               "type": "string",
               "title": "Format",
               "default": "json"
+            },
+            "metric": {
+              "type": "string",
+              "title": "Single metric series"
+            },
+            "nodeId": {
+              "type": "string",
+              "title": "Node ID"
             },
             "range": {
               "type": "string",
@@ -154,6 +221,16 @@
               "type": "number",
               "title": "Max points",
               "default": 1000
+            },
+            "includeAlerts": {
+              "type": "boolean",
+              "title": "Include alerts",
+              "default": false
+            },
+            "includeNotifications": {
+              "type": "boolean",
+              "title": "Include notifications",
+              "default": false
             }
           }
         },
@@ -172,6 +249,28 @@
         "timeoutMs": 3000
       },
       {
+        "name": "storage-health",
+        "title": "Storage health",
+        "description": "Return SQLite integrity, file sizes, WAL size, and cleanup/vacuum hints.",
+        "timeoutMs": 5000
+      },
+      {
+        "name": "checkpoint",
+        "title": "Checkpoint storage",
+        "description": "Run a SQLite WAL checkpoint and PRAGMA optimize.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "title": "Checkpoint mode",
+              "default": "TRUNCATE"
+            }
+          }
+        },
+        "timeoutMs": 10000
+      },
+      {
         "name": "cleanup",
         "title": "Cleanup history",
         "description": "Remove samples older than the configured retention.",
@@ -182,6 +281,22 @@
         "title": "Vacuum storage",
         "description": "Run SQLite VACUUM after cleanup or large retention changes.",
         "timeoutMs": 10000
+      },
+      {
+        "name": "rebuild-rollups",
+        "title": "Rebuild rollups",
+        "description": "Rebuild all downsampled rollup tables from raw samples.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "number",
+              "title": "Optional sample limit",
+              "default": 0
+            }
+          }
+        },
+        "timeoutMs": 30000
       }
     ],
     "webPanels": [
@@ -202,6 +317,34 @@
       "type": "number",
       "description": "Preferred sample interval in milliseconds. The host scheduler may clamp very small values.",
       "default": 5000
+    },
+    {
+      "key": "diskSampleIntervalMs",
+      "label": "Disk sample interval",
+      "type": "number",
+      "description": "Minimum milliseconds between disk usage collector runs. Cached values are reused between runs.",
+      "default": 15000
+    },
+    {
+      "key": "processSampleIntervalMs",
+      "label": "Process sample interval",
+      "type": "number",
+      "description": "Minimum milliseconds between top-process collector runs. Cached values are reused between runs.",
+      "default": 15000
+    },
+    {
+      "key": "thermalSampleIntervalMs",
+      "label": "Thermal sample interval",
+      "type": "number",
+      "description": "Minimum milliseconds between thermal sensor collector runs. Cached values are reused between runs.",
+      "default": 30000
+    },
+    {
+      "key": "batterySampleIntervalMs",
+      "label": "Battery sample interval",
+      "type": "number",
+      "description": "Minimum milliseconds between battery collector runs. Cached values are reused between runs.",
+      "default": 30000
     },
     {
       "key": "retentionDays",
@@ -293,6 +436,27 @@
       "type": "string",
       "description": "Comma-separated alert labels that should not be shown or stored as alert events.",
       "default": ""
+    },
+    {
+      "key": "alertCooldownMinutes",
+      "label": "Alert cooldown",
+      "type": "number",
+      "description": "Minimum minutes between stored notification events for the same alert label and node.",
+      "default": 15
+    },
+    {
+      "key": "alertAcknowledgeMinutes",
+      "label": "Alert acknowledge duration",
+      "type": "number",
+      "description": "Default minutes used when acknowledging an alert label.",
+      "default": 60
+    },
+    {
+      "key": "alertChannel",
+      "label": "Alert channel",
+      "type": "string",
+      "description": "Logical channel name stored with alert notification events.",
+      "default": "nordrelay"
     },
     {
       "key": "thresholdCpuPercent",

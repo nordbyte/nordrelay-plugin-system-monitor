@@ -20,7 +20,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check src/runtime.js && node --check src/processes.js",
+    "check": "node --check index.js && node --check src/runtime.js && node --check src/processes.js && node --check src/render-panel.js && node --check src/format.js && node --check src/collectors.js && node --check src/storage.js && node --check src/history.js && node --check src/commands.js",
     "test": "node --test test/*.test.mjs",
     "prepack": "npm run check && npm test"
   },
