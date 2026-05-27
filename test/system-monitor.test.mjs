@@ -272,6 +272,7 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
     pluginId: "system-monitor",
     panelId: "dashboard",
     input: {
+      autoRefresh: true,
       aggregate: {
         results: [{
           node: { name: "test-node", platform: "linux" },
@@ -340,6 +341,9 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /aria-valuenow="10"/);
   assert.match(parsed.html, /width="10"/);
   assert.match(parsed.html, /metrics-chart-stack/);
+  assert.match(parsed.html, /data-auto-refresh checked/);
+  assert.match(parsed.html, /autoRefresh:autoRefreshEnabled\(\)/);
+  assert.match(parsed.html, /if\(checkbox&&checkbox\.checked\)start\(\)/);
   assert.match(parsed.html, /<svg role="img"/);
   assert.match(parsed.html, /class="chart-hit"/);
   assert.match(parsed.html, /data-chart-tooltip=/);

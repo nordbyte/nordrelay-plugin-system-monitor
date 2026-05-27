@@ -2078,8 +2078,9 @@ function renderDashboardPanel(input = {}, context = {}) {
     .sort((a, b) => b.stressScore - a.stressScore);
   const range = String(input.range || DEFAULT_RANGE);
   const maxPoints = numberInput(input.maxPoints, 240);
+  const autoRefresh = input.autoRefresh === true || input.autoRefresh === "true";
   const panels = nodes.map((item) => renderNodePanel(item, range)).join("");
-  return `<div class="stack" data-system-monitor data-range="${escapeHtml(range)}" data-max-points="${escapeHtml(maxPoints)}">
+  return `<div class="stack" data-system-monitor data-range="${escapeHtml(range)}" data-max-points="${escapeHtml(maxPoints)}" data-auto-refresh-enabled="${autoRefresh ? "true" : "false"}">
     <div class="section-header">
       <div>
         <h1>System Monitor <small>- ${escapeHtml(nodes.length)} node${nodes.length === 1 ? "" : "s"}</small></h1>
@@ -2089,7 +2090,7 @@ function renderDashboardPanel(input = {}, context = {}) {
         ${renderRangeButtons(range)}
         <label class="row mini-control"><span>Custom minutes</span><input type="number" min="1" step="1" value="" data-custom-minutes placeholder="90"></label>
         <button type="button" class="secondary mini-button" data-custom-range-apply>Apply</button>
-        <label class="checkbox"><input type="checkbox" data-auto-refresh> Auto refresh</label>
+        <label class="checkbox"><input type="checkbox" data-auto-refresh${autoRefresh ? " checked" : ""}> Auto refresh</label>
         ${uiBadge(results.length ? "aggregate" : "local", results.length ? "enabled" : "warning")}
       </div>
     </div>
@@ -2400,7 +2401,11 @@ function panelScript() {
 (function(){
   var root=document.currentScript.closest('[data-system-monitor]');
   if(!root)return;
-  function input(range){return {range:range||root.dataset.range||'${DEFAULT_RANGE}',maxPoints:Number(root.dataset.maxPoints)||240};}
+  function autoRefreshEnabled(){
+    var checkbox=root.querySelector('[data-auto-refresh]');
+    return !!(checkbox&&checkbox.checked);
+  }
+  function input(range){return {range:range||root.dataset.range||'${DEFAULT_RANGE}',maxPoints:Number(root.dataset.maxPoints)||240,autoRefresh:autoRefreshEnabled()};}
   root.querySelectorAll('[data-range-button]').forEach(function(button){
     button.addEventListener('click',function(){window.NordRelayPanel&&window.NordRelayPanel.reload&&window.NordRelayPanel.reload(input(button.dataset.rangeButton));});
   });
@@ -2465,6 +2470,7 @@ function panelScript() {
   function start(){stop();timer=setInterval(function(){if(document.visibilityState==='visible'&&window.NordRelayPanel&&window.NordRelayPanel.reload)window.NordRelayPanel.reload(input(root.dataset.range));},10000);}
   if(checkbox)checkbox.addEventListener('change',function(){checkbox.checked?start():stop();});
   window.addEventListener('pagehide',stop);
+  if(checkbox&&checkbox.checked)start();
   if(window.NordRelayPanel&&window.NordRelayPanel.ready)window.NordRelayPanel.ready();
 })();</script>`;
 }
