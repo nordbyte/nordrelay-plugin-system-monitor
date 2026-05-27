@@ -305,6 +305,7 @@
         "title": "System Monitor",
         "placement": "monitor",
         "aggregateCommand": "panel-data",
+        "allowClientScript": true,
         "timeoutMs": 10000
       }
     ],

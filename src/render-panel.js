@@ -90,7 +90,6 @@ export function renderDashboardPanel(input = {}, context = {}, settings = { auto
     </div>
     ${renderComparisonTable(nodes)}
     ${panels || '<div class="empty-state">No monitor data available.</div>'}
-    ${panelScript()}
   </div>`;
 }
 
@@ -469,11 +468,13 @@ function progressBar(value) {
   return `<svg class="progress-svg ${cls}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${width}" viewBox="0 0 100 7" preserveAspectRatio="none"><rect class="progress-track" x="0" y="0" width="100" height="7" rx="3.5"></rect><rect class="progress-fill" x="0" y="0" width="${width}" height="7" rx="3.5" fill="${color}"></rect></svg>`;
 }
 
-function panelScript() {
-  return `<script>
-(function(){
-  var root=document.currentScript.closest('[data-system-monitor]');
+export function dashboardPanelScript() {
+  return `
+  var root=(typeof api!=='undefined'&&api.root?api.root.querySelector('[data-system-monitor]'):null)||(document.currentScript&&document.currentScript.closest('[data-system-monitor]'));
   if(!root)return;
+  function panelReload(payload){
+    if(typeof api!=='undefined'&&api&&api.reload)return api.reload(payload);
+  }
   function autoRefreshEnabled(){
     var checkbox=root.querySelector('[data-auto-refresh]');
     return !!(checkbox&&checkbox.checked);
@@ -486,13 +487,13 @@ function panelScript() {
     return payload;
   }
   root.querySelectorAll('[data-range-button]').forEach(function(button){
-    button.addEventListener('click',function(){window.NordRelayPanel&&window.NordRelayPanel.reload&&window.NordRelayPanel.reload(input(button.dataset.rangeButton));});
+    button.addEventListener('click',function(){panelReload(input(button.dataset.rangeButton));});
   });
   var customApply=root.querySelector('[data-custom-range-apply]');
   var customMinutes=root.querySelector('[data-custom-minutes]');
   if(customApply&&customMinutes)customApply.addEventListener('click',function(){
     var minutes=Math.max(1,Number(customMinutes.value)||0);
-    if(minutes&&window.NordRelayPanel&&window.NordRelayPanel.reload)window.NordRelayPanel.reload({rangeMs:minutes*60000,maxPoints:Number(root.dataset.maxPoints)||240,autoRefresh:autoRefreshEnabled(),autoRefreshMs:Number(root.dataset.autoRefreshMs)||10000});
+    if(minutes)panelReload({rangeMs:minutes*60000,maxPoints:Number(root.dataset.maxPoints)||240,autoRefresh:autoRefreshEnabled(),autoRefreshMs:Number(root.dataset.autoRefreshMs)||10000});
   });
   function applyNodeFilters(){
     var text=(root.querySelector('[data-node-filter]')&&root.querySelector('[data-node-filter]').value||'').toLowerCase();
@@ -600,16 +601,14 @@ function panelScript() {
     if(remainingMs<=0){
       remainingMs=refreshMs();
       renderCountdown();
-      if(document.visibilityState==='visible'&&window.NordRelayPanel&&window.NordRelayPanel.reload)window.NordRelayPanel.reload(input(root.dataset.range));
+      if(document.visibilityState==='visible')panelReload(input(root.dataset.range));
       return;
     }
     renderCountdown();
   }
-  function start(){clearTimer();remainingMs=refreshMs();renderCountdown();timer=setInterval(tick,1000);}
+  function start(){clearTimer();remainingMs=refreshMs();renderCountdown();timer=(typeof api!=='undefined'&&api&&api.setInterval?api.setInterval(tick,1000):setInterval(tick,1000));}
   if(checkbox)checkbox.addEventListener('change',function(){checkbox.checked?start():stop();});
-  window.addEventListener('pagehide',stop);
+  if(typeof api!=='undefined'&&api&&api.addEventListener)api.addEventListener(window,'pagehide',stop);else window.addEventListener('pagehide',stop);
   if(checkbox&&checkbox.checked)start();else renderCountdown();
-  applyNodeFilters();
-  if(window.NordRelayPanel&&window.NordRelayPanel.ready)window.NordRelayPanel.ready();
-})();</script>`;
+  applyNodeFilters();`;
 }

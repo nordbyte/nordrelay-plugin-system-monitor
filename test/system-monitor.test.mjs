@@ -501,9 +501,10 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /metrics-chart-stack/);
   assert.match(parsed.html, /data-auto-refresh checked/);
   assert.match(parsed.html, /data-auto-refresh-countdown/);
-  assert.match(parsed.html, /autoRefresh:autoRefreshEnabled\(\)/);
-  assert.match(parsed.html, /Math\.ceil\(remainingMs\/1000\)/);
-  assert.match(parsed.html, /if\(checkbox&&checkbox\.checked\)start\(\)/);
+  assert.equal(typeof parsed.panel?.script, "string");
+  assert.match(parsed.panel.script, /autoRefresh:autoRefreshEnabled\(\)/);
+  assert.match(parsed.panel.script, /Math\.ceil\(remainingMs\/1000\)/);
+  assert.match(parsed.panel.script, /if\(checkbox&&checkbox\.checked\)start\(\)/);
   assert.match(parsed.html, /data-node-filter/);
   assert.match(parsed.html, /data-node-sort/);
   assert.match(parsed.html, /data-node-collapse/);
@@ -530,7 +531,8 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /Network health/);
   assert.match(parsed.html, /Pressure/);
   assert.match(parsed.html, /Swap/);
-  assert.match(parsed.html, /NordRelayPanel\.reload/);
+  assert.match(parsed.panel.script, /panelReload/);
+  assert.doesNotMatch(parsed.html, /<script>/i);
   assert.doesNotMatch(parsed.html, /<!doctype html>/i);
   assert.doesNotMatch(parsed.html, /<style>/i);
   assert.doesNotMatch(parsed.html, /style="/i);

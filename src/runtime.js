@@ -9,7 +9,7 @@ import { collectCachedMetric, collectMetric } from "./collectors.js";
 import { normalizeCommand } from "./commands.js";
 import { rollupPeriodForRange as selectRollupPeriod } from "./history.js";
 import { collectProcesses } from "./processes.js";
-import { renderDashboardPanel } from "./render-panel.js";
+import { dashboardPanelScript, renderDashboardPanel } from "./render-panel.js";
 import { checkpointDatabase, databaseFilesSize, databaseHealth, optimizeDatabase } from "./storage.js";
 
 const DB_FILE = "metrics.sqlite";
@@ -95,7 +95,8 @@ export async function runPlugin() {
   await mkdir(dataDir, { recursive: true });
 
   if (request.type === "web-panel") {
-    writeResult({ ok: true, html: renderDashboardPanel(request.input, request.context, settings) });
+    const html = renderDashboardPanel(request.input, request.context, settings);
+    writeResult({ ok: true, html, panel: { html, script: dashboardPanelScript() } });
     return;
   }
 
