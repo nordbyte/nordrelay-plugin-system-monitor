@@ -392,10 +392,13 @@ test("migrates an existing v1 SQLite database in place", async () => {
   assert.equal(parsed.ok, true);
   const migrated = new DatabaseSync(dbPath);
   const sampleColumns = migrated.prepare("PRAGMA table_info(samples)").all().map((row) => row.name);
+  const rollupColumns = migrated.prepare("PRAGMA table_info(rollups)").all().map((row) => row.name);
   const tables = migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
   migrated.close();
   assert.ok(sampleColumns.includes("swap_percent"));
   assert.ok(tables.includes("rollups"));
+  assert.ok(rollupColumns.includes("memory_used_bytes_avg"));
+  assert.ok(rollupColumns.includes("swap_total_bytes_avg"));
 });
 
 test("manifest command catalog matches runtime command catalog", () => {
@@ -452,8 +455,8 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
                   fromMs: Date.parse("2026-05-26T07:00:00.000Z"),
                   toMs: Date.parse("2026-05-26T08:00:00.000Z"),
                   points: [
-                    { timestamp: Date.parse("2026-05-26T07:00:00.000Z"), cpuPercent: 10, memoryPercent: 30, swapPercent: 5, cpuSystemPercent: 2, cpuIowaitPercent: 1, cpuStealPercent: 0, diskReadBytesPerSec: 100, diskWriteBytesPerSec: 200, rxBytesPerSec: 300, txBytesPerSec: 400 },
-                    { timestamp: Date.parse("2026-05-26T08:00:00.000Z"), cpuPercent: 12.5, memoryPercent: 34.5, swapPercent: 10, cpuSystemPercent: 4, cpuIowaitPercent: 2, cpuStealPercent: 0, diskReadBytesPerSec: 200, diskWriteBytesPerSec: 300, rxBytesPerSec: 400, txBytesPerSec: 500 },
+                    { timestamp: Date.parse("2026-05-26T07:00:00.000Z"), cpuPercent: 10, memoryPercent: 30, memoryUsedBytes: 7 * 1024 ** 3, memoryAvailableBytes: 9 * 1024 ** 3, memoryTotalBytes: 16 * 1024 ** 3, swapPercent: 5, swapUsedBytes: 512 * 1024 ** 2, swapFreeBytes: 9.5 * 1024 ** 3, swapTotalBytes: 10 * 1024 ** 3, cpuSystemPercent: 2, cpuIowaitPercent: 1, cpuStealPercent: 0, diskReadBytesPerSec: 100, diskWriteBytesPerSec: 200, rxBytesPerSec: 300, txBytesPerSec: 400 },
+                    { timestamp: Date.parse("2026-05-26T08:00:00.000Z"), cpuPercent: 12.5, memoryPercent: 34.5, memoryUsedBytes: 8 * 1024 ** 3, memoryAvailableBytes: 8 * 1024 ** 3, memoryTotalBytes: 16 * 1024 ** 3, swapPercent: 10, swapUsedBytes: 1 * 1024 ** 3, swapFreeBytes: 9 * 1024 ** 3, swapTotalBytes: 10 * 1024 ** 3, cpuSystemPercent: 4, cpuIowaitPercent: 2, cpuStealPercent: 0, diskReadBytesPerSec: 200, diskWriteBytesPerSec: 300, rxBytesPerSec: 400, txBytesPerSec: 500 },
                   ],
                   disks: [{ mount: "/", points: [
                     { timestamp: Date.parse("2026-05-26T07:00:00.000Z"), percent: 55 },
@@ -526,6 +529,14 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /class="chart-axis-label/);
   assert.match(parsed.html, /class="row chart-legend"/);
   assert.match(parsed.html, /Hover the chart for exact values/);
+  assert.match(parsed.html, /CPU usage - 90m/);
+  assert.match(parsed.html, /Memory - 90m/);
+  assert.match(parsed.html, /Memory used/);
+  assert.match(parsed.html, /Memory available/);
+  assert.match(parsed.html, /Swap - 90m/);
+  assert.match(parsed.html, /Swap used/);
+  assert.match(parsed.html, /Swap available/);
+  assert.doesNotMatch(parsed.html, /CPU and memory/);
   assert.match(parsed.html, /CPU: 10%/);
   assert.match(parsed.html, /CPU load/);
   assert.match(parsed.html, /0\.12 \/ 0\.34 \/ 0\.56/);
@@ -609,4 +620,5 @@ test("shows only the local node details by default and can switch nodes", () => 
   assert.match(parsed.html, /data-monitor-node-key="local"[^>]*class="selected"/);
   assert.match(parsed.html, /data-monitor-node-key="local"[^>]*>\s*<div class="section-header">/);
   assert.match(parsed.html, /data-monitor-node-key="remote-1"[^>]* hidden>/);
+  assert.doesNotMatch(parsed.html, /Swap - 1h/);
 });

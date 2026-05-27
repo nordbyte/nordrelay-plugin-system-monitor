@@ -288,11 +288,11 @@ function renderNodePanel(item, range, selected = true) {
       ${renderCollectorDiagnostics(sample.collectors || [])}
       ${renderAlertHistory(panelData?.alerts?.events || [])}
       <div class="stack metrics-chart-stack">
-      ${renderLineChart("CPU and memory - " + range, history.points || [], [
+      ${renderLineChart("CPU usage - " + range, history.points || [], [
         { key: "cpuPercent", label: "CPU", color: "#1d8a5b", max: 100 },
-        { key: "memoryPercent", label: "Memory", color: "#f2c94c", max: 100 },
-        { key: "swapPercent", label: "Swap", color: "#9b1c1c", max: 100 },
       ], "%")}
+      ${renderMemoryChart(sample, history, range)}
+      ${renderSwapChart(sample, history, range)}
       ${renderLineChart("CPU breakdown - " + range, history.points || [], [
         { key: "cpuSystemPercent", label: "System", color: "#2f80ed", max: 100 },
         { key: "cpuIowaitPercent", label: "I/O wait", color: "#f2994a", max: 100 },
@@ -438,6 +438,56 @@ function renderNetworkCharts(network) {
     { key: "txBytesPerSec", label: "Up", color: "#235c42" },
   ], "B/s", (value) => `${formatBytes(value)}/s`)}</div>`).join("");
   return renderChartSelector("network", network.slice(0, 4).map((item) => item.name || "interface"), charts);
+}
+
+function renderMemoryChart(sample, history, range) {
+  const points = Array.isArray(history?.points) ? history.points : [];
+  const max = memoryChartMax(sample, points);
+  return renderLineChart("Memory - " + range, points, [
+    { key: "memoryUsedBytes", label: "Memory used", color: "#1d8a5b", max },
+    { key: "memoryAvailableBytes", label: "Memory available", color: "#2f80ed", max },
+  ], "B", (value) => formatBytes(value));
+}
+
+function renderSwapChart(sample, history, range) {
+  const points = Array.isArray(history?.points) ? history.points : [];
+  if (!hasSwapConfigured(sample, points)) return "";
+  const max = swapChartMax(sample, points);
+  return renderLineChart("Swap - " + range, points, [
+    { key: "swapUsedBytes", label: "Swap used", color: "#9b1c1c", max },
+    { key: "swapFreeBytes", label: "Swap available", color: "#f2994a", max },
+  ], "B", (value) => formatBytes(value));
+}
+
+function hasSwapConfigured(sample, points = []) {
+  if (Number(sample?.memory?.swapTotalBytes) > 0) return true;
+  return points.some((point) => Number(point?.swapTotalBytes) > 0);
+}
+
+function memoryChartMax(sample, points = []) {
+  return Math.max(
+    1,
+    Number(sample?.memory?.totalBytes) || 0,
+    maxHistoryValue(points, ["memoryTotalBytes", "memoryUsedBytes", "memoryAvailableBytes"]),
+  );
+}
+
+function swapChartMax(sample, points = []) {
+  return Math.max(
+    1,
+    Number(sample?.memory?.swapTotalBytes) || 0,
+    maxHistoryValue(points, ["swapTotalBytes", "swapUsedBytes", "swapFreeBytes"]),
+  );
+}
+
+function maxHistoryValue(points, keys) {
+  let max = 0;
+  for (const point of Array.isArray(points) ? points : []) {
+    for (const key of keys) {
+      max = Math.max(max, Number(point?.[key]) || 0);
+    }
+  }
+  return max;
 }
 
 function renderChartSelector(type, labels, charts) {

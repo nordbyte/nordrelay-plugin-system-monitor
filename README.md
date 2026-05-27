@@ -54,11 +54,12 @@ The dashboard aggregates data only from peers where this plugin is installed,
 enabled, and approved.
 
 The dashboard stores long-term history in SQLite and renders current CPU usage,
-CPU breakdown, per-core hotspots, CPU load averages, real memory in GB, swap,
-memory pressure, page faults, local disk used/free space, inode usage, disk I/O,
-network usage, network errors/drops/retransmits, thermals, battery state, alert
-thresholds, alert history, top processes, collector diagnostics, node comparison,
-range summaries, and downsampled charts per peer.
+CPU breakdown, per-core hotspots, CPU load averages, real memory used/available
+in GB, swap used/available when configured, memory pressure, page faults, local
+disk used/free space, inode usage, disk I/O, network usage, network
+errors/drops/retransmits, thermals, battery state, alert thresholds, alert
+history, top processes, collector diagnostics, node comparison, range summaries,
+and downsampled charts per peer.
 
 For longer ranges, core metrics, disk usage, disk I/O, and network charts use
 SQLite rollups instead of repeatedly aggregating all raw samples.
