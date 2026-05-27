@@ -47,6 +47,7 @@ function invokePlugin(payload) {
     encoding: "utf8",
   });
   assertPluginSucceeded(result);
+  assert.notEqual(result.stdout.trim(), "", result.stderr || "Plugin process produced no JSON output");
   return JSON.parse(result.stdout);
 }
 
