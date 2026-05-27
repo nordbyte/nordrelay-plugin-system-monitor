@@ -342,6 +342,10 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /max-width:10%/);
   assert.match(parsed.html, /<svg role="img"/);
   assert.match(parsed.html, /class="chart-hit"/);
+  assert.match(parsed.html, /data-chart-tooltip=/);
+  assert.match(parsed.html, /data-chart-tooltip-popup/);
+  assert.match(parsed.html, /class="chart-axis-label/);
+  assert.match(parsed.html, /class="row chart-legend"/);
   assert.match(parsed.html, /Hover the chart for exact values/);
   assert.match(parsed.html, /CPU: 10%/);
   assert.match(parsed.html, /CPU load/);
@@ -359,4 +363,5 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /NordRelayPanel\.reload/);
   assert.doesNotMatch(parsed.html, /<!doctype html>/i);
   assert.doesNotMatch(parsed.html, /<style>/i);
+  assert.doesNotMatch(parsed.html, /<text /i);
 });

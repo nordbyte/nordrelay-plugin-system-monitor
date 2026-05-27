@@ -2345,23 +2345,27 @@ function renderLineChart(title, points, series, unit = "", formatter = (value) =
     const nextX = index < rows.length - 1 ? x(rows[index + 1].timestamp) : width - pad.right;
     const left = index > 0 ? (previousX + currentX) / 2 : pad.left;
     const right = index < rows.length - 1 ? (currentX + nextX) / 2 : width - pad.right;
-    return `<rect class="chart-hit" x="${left.toFixed(1)}" y="${pad.top}" width="${Math.max(2, right - left).toFixed(1)}" height="${height - pad.top - pad.bottom}" fill="transparent" pointer-events="all"><title>${escapeHtml(chartTooltip(point, series, formatter))}</title></rect>`;
+    const tooltip = chartTooltip(point, series, formatter);
+    return `<rect class="chart-hit" tabindex="0" role="img" aria-label="${escapeHtml(tooltip)}" data-chart-tooltip="${escapeHtml(tooltip).replace(/\n/g, "&#10;")}" x="${left.toFixed(1)}" y="${pad.top}" width="${Math.max(2, right - left).toFixed(1)}" height="${height - pad.top - pad.bottom}" fill="transparent" pointer-events="all"><title>${escapeHtml(tooltip)}</title></rect>`;
   }).join("");
-  const legend = series.map((line) => `<span class="chip"><span style="display:inline-block;width:9px;height:9px;border-radius:999px;background:${escapeHtml(line.color)}"></span>${escapeHtml(line.label)}</span>`).join("");
+  const legend = series.map((line) => `<span class="chip chart-legend-item" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:1.25;font-family:inherit;letter-spacing:0;transform:none;font-stretch:normal"><span style="display:inline-block;width:9px;height:9px;min-width:9px;border-radius:999px;background:${escapeHtml(line.color)}"></span>${escapeHtml(line.label)}</span>`).join("");
   const latest = rows.at(-1) || {};
   const latestText = series.map((line) => `${line.label}: ${formatter(Number(latest[line.key]) || 0)}`).join(" | ");
   return `<div class="panel">
     <div class="section-header"><h3>${escapeHtml(title)}</h3><small>${escapeHtml(latestText)}</small></div>
-    <svg role="img" aria-label="${escapeHtml(title)} chart" viewBox="0 0 ${width} ${height}" width="100%" height="180" preserveAspectRatio="none">
-      <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
-      <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="currentColor" opacity="0.18"></line>
-      <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="currentColor" opacity="0.18"></line>
-      <text x="4" y="${pad.top + 4}" fill="currentColor" opacity="0.55" font-size="11">${escapeHtml(formatter(maxValue))}</text>
-      <text x="4" y="${height - pad.bottom}" fill="currentColor" opacity="0.55" font-size="11">0</text>
-      ${paths}
-      ${hitAreas}
-    </svg>
-    <div class="row">${legend}</div>
+    <div class="chart-wrap" data-chart-wrap style="position:relative;width:100%;min-height:180px">
+      <span class="chart-axis-label chart-axis-label-top" style="position:absolute;left:4px;top:4px;z-index:1;pointer-events:none;color:var(--muted);font-size:11px;line-height:1.2;letter-spacing:0;font-family:inherit">${escapeHtml(formatter(maxValue))}</span>
+      <span class="chart-axis-label chart-axis-label-bottom" style="position:absolute;left:4px;bottom:26px;z-index:1;pointer-events:none;color:var(--muted);font-size:11px;line-height:1.2;letter-spacing:0;font-family:inherit">0</span>
+      <svg role="img" aria-label="${escapeHtml(title)} chart" viewBox="0 0 ${width} ${height}" width="100%" height="180" preserveAspectRatio="none" style="display:block">
+        <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
+        <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="currentColor" opacity="0.18"></line>
+        <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="currentColor" opacity="0.18"></line>
+        ${paths}
+        ${hitAreas}
+      </svg>
+      <div class="chart-tooltip" data-chart-tooltip-popup hidden style="position:absolute;left:0;top:0;z-index:20;max-width:280px;white-space:pre-line;pointer-events:none;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);box-shadow:var(--shadow);font-size:12px;line-height:1.35;letter-spacing:0;font-family:inherit"></div>
+    </div>
+    <div class="row chart-legend" style="align-items:center;gap:6px">${legend}</div>
     <small class="chart-tooltip-note">Hover the chart for exact values.</small>
   </div>`;
 }
@@ -2409,10 +2413,51 @@ function panelScript() {
   root.querySelectorAll('[data-chart-selector]').forEach(function(select){
     select.addEventListener('change',function(){
       var type=select.dataset.chartSelector;
+      hideChartTooltips();
       root.querySelectorAll('[data-selectable-chart="'+type+'"]').forEach(function(chart){
         chart.hidden=chart.dataset.chartIndex!==select.value;
       });
     });
+  });
+  function tooltipFor(target){
+    var chart=target.closest('[data-chart-wrap]');
+    return chart?chart.querySelector('[data-chart-tooltip-popup]'):null;
+  }
+  function positionTooltip(target,event){
+    var tooltip=tooltipFor(target);
+    var chart=target.closest('[data-chart-wrap]');
+    if(!tooltip||!chart)return;
+    var rect=chart.getBoundingClientRect();
+    var x=event&&Number.isFinite(event.clientX)?event.clientX-rect.left:Number(target.getAttribute('x')||0);
+    var y=event&&Number.isFinite(event.clientY)?event.clientY-rect.top:Number(target.getAttribute('y')||0);
+    var tooltipWidth=Math.min(280,tooltip.offsetWidth||220);
+    var left=Math.max(8,Math.min(Math.max(8,rect.width-tooltipWidth-8),x+12));
+    var top=Math.max(8,y+12);
+    if(top+(tooltip.offsetHeight||60)>rect.height-8)top=Math.max(8,y-(tooltip.offsetHeight||60)-12);
+    tooltip.style.left=left+'px';
+    tooltip.style.top=top+'px';
+  }
+  function showTooltip(target,event){
+    var tooltip=tooltipFor(target);
+    var value=target.getAttribute('data-chart-tooltip');
+    if(!tooltip||!value)return;
+    tooltip.textContent=value;
+    tooltip.hidden=false;
+    positionTooltip(target,event);
+  }
+  function hideTooltip(target){
+    var tooltip=tooltipFor(target);
+    if(tooltip)tooltip.hidden=true;
+  }
+  function hideChartTooltips(){
+    root.querySelectorAll('[data-chart-tooltip-popup]').forEach(function(tooltip){tooltip.hidden=true;});
+  }
+  root.querySelectorAll('.chart-hit').forEach(function(hit){
+    hit.addEventListener('pointerenter',function(event){showTooltip(hit,event);});
+    hit.addEventListener('pointermove',function(event){positionTooltip(hit,event);});
+    hit.addEventListener('pointerleave',function(){hideTooltip(hit);});
+    hit.addEventListener('focus',function(){showTooltip(hit);});
+    hit.addEventListener('blur',function(){hideTooltip(hit);});
   });
   var timer=null;
   var checkbox=root.querySelector('[data-auto-refresh]');
