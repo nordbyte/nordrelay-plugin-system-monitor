@@ -18,9 +18,11 @@ import {
   parseProcPressureMemory,
   parseProcStat,
   parseProcVmstat,
+  parsePsOutput,
   parseWindowsDiskOutput,
   parseWindowsDiskIoOutput,
   parseWindowsNetworkOutput,
+  parseWindowsProcessOutput,
 } from "../index.js";
 
 function assertPluginSucceeded(result) {
@@ -115,6 +117,20 @@ test("parses Windows counters", () => {
   assert.deepEqual(network, [{ name: "Ethernet", rxBytes: 10, txBytes: 20, rxErrors: 1, txErrors: 2, rxDropped: 0, txDropped: 0 }]);
 });
 
+test("parses top processes and marks coding agents", () => {
+  const rows = parsePsOutput(`  PID %CPU %MEM   RSS COMM             COMMAND
+  100 12.5  1.5 10000 node             node server.js
+  101  2.0  0.5  8000 codex            codex exec prompt
+`);
+  assert.equal(rows[0].agent, true);
+  assert.equal(rows[0].name, "codex");
+  assert.equal(rows[0].rssBytes, 8000 * 1024);
+
+  const windows = parseWindowsProcessOutput(JSON.stringify([{ Id: 10, ProcessName: "claude", WorkingSet64: 1024, Path: "C:\\\\Tools\\\\claude.exe" }]));
+  assert.equal(windows[0].agent, true);
+  assert.equal(windows[0].rssBytes, 1024);
+});
+
 test("collects a sample through the NordRelay plugin request contract", async () => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "nordrelay-system-monitor-"));
   const payload = {
@@ -174,6 +190,11 @@ test("returns chart-ready panel data from SQLite history", async () => {
   assert.equal(parsed.output.panelData.current.node.name, "test-node");
   assert.ok(parsed.output.panelData.history.points.length >= 1);
   assert.ok(parsed.output.panelData.storage.samples >= 3);
+  assert.ok(parsed.output.panelData.storage.rollupRows >= 1);
+  assert.ok(parsed.output.panelData.storage.diskRollupRows >= 0);
+  assert.ok(Array.isArray(parsed.output.panelData.alerts.events));
+  assert.ok(Array.isArray(parsed.output.panelData.current.collectors));
+  assert.ok(Array.isArray(parsed.output.panelData.current.processes));
   assert.ok(typeof parsed.output.panelData.current.cpu.breakdown.user === "number");
   assert.ok(typeof parsed.output.panelData.current.memory.swapPercent === "number");
   assert.ok(Array.isArray(parsed.output.panelData.history.diskIo));
@@ -189,6 +210,63 @@ test("returns chart-ready panel data from SQLite history", async () => {
   assert.equal(exported.ok, true);
   assert.equal(exported.output.format, "csv");
   assert.match(exported.output.data, /timestamp,cpu_percent,memory_percent,swap_percent/);
+});
+
+test("stores alert history and collector diagnostics", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "nordrelay-system-monitor-"));
+  const payload = {
+    protocolVersion: 1,
+    type: "command",
+    pluginId: "system-monitor",
+    command: "sample",
+    input: {},
+    settings: testSettings({ thresholdMemoryPercent: 1, trackProcesses: true, maxProcesses: 3 }),
+    dataDir,
+    permissions: ["system.metrics.read"],
+    context: { runtime: { nodeName: "alert-node", platform: process.platform } },
+  };
+  const sampleResult = spawnSync(process.execPath, ["index.js"], {
+    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
+    input: JSON.stringify(payload),
+    encoding: "utf8",
+  });
+  assertPluginSucceeded(sampleResult);
+  const sample = JSON.parse(sampleResult.stdout).output.sample;
+  assert.ok(sample.alerts.some((alert) => alert.label === "Memory"));
+  assert.ok(sample.collectors.some((collector) => collector.name === "memory" && collector.ok));
+  assert.ok(Array.isArray(sample.processes));
+
+  const alertResult = spawnSync(process.execPath, ["index.js"], {
+    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
+    input: JSON.stringify({ ...payload, command: "alerts", input: { range: "24h" } }),
+    encoding: "utf8",
+  });
+  assertPluginSucceeded(alertResult);
+  const alerts = JSON.parse(alertResult.stdout).output.alerts.events;
+  assert.ok(alerts.some((alert) => alert.label === "Memory"));
+});
+
+test("silences configured alert labels", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "nordrelay-system-monitor-"));
+  const payload = {
+    protocolVersion: 1,
+    type: "command",
+    pluginId: "system-monitor",
+    command: "sample",
+    input: {},
+    settings: testSettings({ thresholdMemoryPercent: 1, silencedAlertLabels: "Memory" }),
+    dataDir,
+    permissions: ["system.metrics.read"],
+    context: { runtime: { nodeName: "silent-node", platform: process.platform } },
+  };
+  const result = spawnSync(process.execPath, ["index.js"], {
+    cwd: path.resolve(fileURLToPath(new URL("..", import.meta.url))),
+    input: JSON.stringify(payload),
+    encoding: "utf8",
+  });
+  assertPluginSucceeded(result);
+  const sample = JSON.parse(result.stdout).output.sample;
+  assert.equal(sample.alerts.some((alert) => alert.label === "Memory"), false);
 });
 
 test("migrates an existing v1 SQLite database in place", async () => {
@@ -273,6 +351,8 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
     panelId: "dashboard",
     input: {
       autoRefresh: true,
+      autoRefreshMs: 15000,
+      rangeMs: 90 * 60 * 1000,
       aggregate: {
         results: [{
           node: { name: "test-node", platform: "linux" },
@@ -292,6 +372,8 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
                   networkHealth: { errors: 1, drops: 2, tcpRetransmitsPerSec: 0.1 },
                   environment: { thermal: [{ label: "cpu", celsius: 45 }], battery: { percent: 80, status: "Charging" } },
                   alerts: [{ level: "warning", label: "Disk", value: 90, threshold: 90, unit: "%" }],
+                  collectors: [{ name: "cpu", ok: true, durationMs: 2, failures: 0 }],
+                  processes: [{ pid: 123, name: "codex", command: "codex exec", cpuPercent: 5, rssBytes: 1024, agent: true }],
                 },
                 history: {
                   fromMs: Date.parse("2026-05-26T07:00:00.000Z"),
@@ -313,6 +395,7 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
                     { timestamp: Date.parse("2026-05-26T08:00:00.000Z"), rxBytesPerSec: 1024, txBytesPerSec: 2048 },
                   ] }],
                 },
+                alerts: { events: [{ timestamp: "2026-05-26T08:00:00.000Z", level: "warning", label: "Disk", value: 90, threshold: 90, unit: "%" }] },
                 summary: { samples: 2, cpu: { min: 10, avg: 11.2, max: 12.5 }, cpuIowait: { avg: 1.5, max: 2 }, memory: { min: 30, avg: 32.2, max: 34.5 }, swap: { min: 5, avg: 7.5, max: 10 }, diskIo: { maxReadBytesPerSec: 4096, maxWriteBytesPerSec: 8192, maxBusyPercent: 12 } },
                 storage: { samples: 2, sizeBytes: 1024, retentionDays: 30 },
               },
@@ -336,6 +419,8 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.equal(parsed.ok, true);
   assert.match(parsed.html, /class="stack"/);
   assert.match(parsed.html, /class="metrics-grid"/);
+  assert.match(parsed.html, /data-range-ms="5400000"/);
+  assert.match(parsed.html, /data-auto-refresh-ms="15000"/);
   assert.match(parsed.html, /class="panel"/);
   assert.match(parsed.html, /class="progress-svg/);
   assert.match(parsed.html, /aria-valuenow="10"/);
@@ -344,6 +429,12 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /data-auto-refresh checked/);
   assert.match(parsed.html, /autoRefresh:autoRefreshEnabled\(\)/);
   assert.match(parsed.html, /if\(checkbox&&checkbox\.checked\)start\(\)/);
+  assert.match(parsed.html, /data-node-filter/);
+  assert.match(parsed.html, /data-node-sort/);
+  assert.match(parsed.html, /data-node-collapse/);
+  assert.match(parsed.html, /Top process/);
+  assert.match(parsed.html, /Collector diagnostics/);
+  assert.match(parsed.html, /Alert history/);
   assert.match(parsed.html, /<svg role="img"/);
   assert.match(parsed.html, /class="chart-hit"/);
   assert.match(parsed.html, /data-chart-tooltip=/);

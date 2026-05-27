@@ -113,6 +113,27 @@
         "timeoutMs": 5000
       },
       {
+        "name": "alerts",
+        "title": "Alert history",
+        "description": "Return threshold alert events for a time range.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "range": {
+              "type": "string",
+              "title": "Range",
+              "default": "24h"
+            },
+            "limit": {
+              "type": "number",
+              "title": "Limit",
+              "default": 100
+            }
+          }
+        },
+        "timeoutMs": 5000
+      },
+      {
         "name": "export",
         "title": "Export metrics",
         "description": "Export downsampled metrics history as JSON or CSV.",
@@ -253,6 +274,27 @@
       "default": true
     },
     {
+      "key": "trackProcesses",
+      "label": "Track processes",
+      "type": "boolean",
+      "description": "Collect top CPU/RAM processes and mark known agent processes.",
+      "default": true
+    },
+    {
+      "key": "maxProcesses",
+      "label": "Max processes",
+      "type": "number",
+      "description": "Maximum number of top processes to keep per sample.",
+      "default": 10
+    },
+    {
+      "key": "silencedAlertLabels",
+      "label": "Silenced alert labels",
+      "type": "string",
+      "description": "Comma-separated alert labels that should not be shown or stored as alert events.",
+      "default": ""
+    },
+    {
       "key": "thresholdCpuPercent",
       "label": "CPU alert threshold",
       "type": "number",
@@ -293,6 +335,13 @@
       "type": "number",
       "description": "Show an alert when a disk is busy above this percentage.",
       "default": 85
+    },
+    {
+      "key": "thresholdCriticalPercent",
+      "label": "Critical alert threshold",
+      "type": "number",
+      "description": "Show critical severity when a percentage-based alert reaches this value.",
+      "default": 95
     }
   ]
 }

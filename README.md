@@ -38,7 +38,7 @@ plugin on all reachable peers without logging into each peer separately.
 ## Capabilities
 
 - Collector: `system.sample`
-- Commands: `sample`, `latest`, `history`, `panel-data`, `series`, `summary`, `export`, `status`, `storage`, `cleanup`, `vacuum`
+- Commands: `sample`, `latest`, `history`, `panel-data`, `series`, `summary`, `alerts`, `export`, `status`, `storage`, `cleanup`, `vacuum`
 - Web panel: `dashboard`
 - Diagnostics: enabled
 
@@ -55,7 +55,11 @@ The dashboard stores long-term history in SQLite and renders current CPU usage,
 CPU breakdown, per-core hotspots, CPU load averages, real memory in GB, swap,
 memory pressure, page faults, local disk used/free space, inode usage, disk I/O,
 network usage, network errors/drops/retransmits, thermals, battery state, alert
-thresholds, node comparison, range summaries, and downsampled charts per peer.
+thresholds, alert history, top processes, collector diagnostics, node comparison,
+range summaries, and downsampled charts per peer.
+
+For longer ranges, core metrics, disk usage, disk I/O, and network charts use
+SQLite rollups instead of repeatedly aggregating all raw samples.
 
 ## Settings
 
@@ -72,12 +76,16 @@ thresholds, node comparison, range summaries, and downsampled charts per peer.
 | `trackInodes` | `true` | Collect inode usage on Unix-like systems |
 | `trackThermals` | `true` | Collect thermal sensors where available |
 | `trackBattery` | `true` | Collect battery status where available |
+| `trackProcesses` | `true` | Collect top CPU/RAM processes and mark known coding agents |
+| `maxProcesses` | `10` | Maximum number of top processes stored per sample |
+| `silencedAlertLabels` | `""` | Comma-separated alert labels to suppress |
 | `thresholdCpuPercent` | `90` | CPU alert threshold |
 | `thresholdMemoryPercent` | `90` | Memory alert threshold |
 | `thresholdDiskPercent` | `90` | Disk and inode alert threshold |
 | `thresholdSwapPercent` | `75` | Swap alert threshold |
 | `thresholdIowaitPercent` | `25` | CPU I/O wait alert threshold |
 | `thresholdDiskBusyPercent` | `85` | Disk busy alert threshold |
+| `thresholdCriticalPercent` | `95` | Percentage value that upgrades an alert to critical severity |
 
 ## Data
 
@@ -93,15 +101,17 @@ The plugin writes:
 - `state.json`
 
 `metrics.sqlite` contains samples, disk rows, disk I/O rows, network rows,
-per-core CPU rows, and rollups with indexes for range queries. `state.json` only
-keeps lightweight counter snapshots needed to calculate CPU, disk, memory, and
-network rates between samples.
+per-core CPU rows, alert events, core rollups, disk rollups, disk I/O rollups,
+and network rollups with indexes for range queries. `state.json` only keeps
+lightweight counter snapshots and collector status needed to calculate CPU,
+disk, memory, and network rates between samples.
 
 Useful commands:
 
 ```sh
 nordrelay plugin invoke system-monitor command panel-data --input-json '{"range":"24h","maxPoints":300}'
 nordrelay plugin invoke system-monitor command summary --input-json '{"range":"7d"}'
+nordrelay plugin invoke system-monitor command alerts --input-json '{"range":"24h","limit":100}'
 nordrelay plugin invoke system-monitor command export --input-json '{"format":"csv","range":"30d","maxPoints":1000}'
 nordrelay plugin invoke system-monitor command storage
 nordrelay plugin invoke system-monitor command cleanup
