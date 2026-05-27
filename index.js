@@ -2387,10 +2387,8 @@ function progressBar(value) {
   const number = Number(value) || 0;
   const cls = number >= 90 ? "error" : number >= 75 ? "warn" : "";
   const width = Math.max(0, Math.min(100, number));
-  const ratio = width / 100;
-  const clipRight = 100 - width;
   const color = cls === "error" ? "var(--danger)" : cls === "warn" ? "var(--warn-text)" : "var(--success)";
-  return `<div class="progress" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${width}" style="height:7px;width:100%;background:color-mix(in srgb,var(--border) 50%,transparent);border-radius:999px;overflow:hidden"><span class="progress-fill ${cls}" style="display:block;height:100%;width:100%;max-width:100%;min-width:0;transform-origin:left center;transform:scaleX(${ratio});clip-path:inset(0 ${clipRight}% 0 0);background:${color};border-radius:inherit"></span></div>`;
+  return `<div class="progress" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${width}" style="height:7px;width:100%;background:color-mix(in srgb,var(--border) 50%,transparent);border-radius:999px;overflow:hidden"><span class="progress-fill ${cls}" style="display:block;height:100%;width:${width}%;max-width:${width}%;min-width:0;background:${color};border-radius:inherit"></span></div>`;
 }
 
 function panelScript() {
