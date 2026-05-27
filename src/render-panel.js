@@ -75,7 +75,7 @@ export function renderDashboardPanel(input = {}, context = {}, settings = { auto
         ${renderRangeButtons(rangeState.preset || "")}
         <label class="row mini-control"><span>Custom minutes</span><input type="number" min="1" step="1" value="${rangeState.customMinutes ? escapeHtml(rangeState.customMinutes) : ""}" data-custom-minutes placeholder="90"></label>
         <button type="button" class="secondary mini-button" data-custom-range-apply>Apply</button>
-        <label class="checkbox"><input type="checkbox" data-auto-refresh${autoRefresh ? " checked" : ""}> Auto refresh</label>
+        <label class="checkbox"><input type="checkbox" data-auto-refresh${autoRefresh ? " checked" : ""}> <span>Auto refresh <span data-auto-refresh-countdown${autoRefresh ? "" : " hidden"}></span></span></label>
         ${uiBadge(results.length ? "aggregate" : "local", results.length ? "enabled" : "warning")}
       </div>
     </div>
@@ -578,12 +578,37 @@ function panelScript() {
     hit.addEventListener('blur',function(){hideTooltip(hit);});
   });
   var timer=null;
+  var remainingMs=0;
   var checkbox=root.querySelector('[data-auto-refresh]');
-  function stop(){if(timer){clearInterval(timer);timer=null;}}
-  function start(){stop();timer=setInterval(function(){if(document.visibilityState==='visible'&&window.NordRelayPanel&&window.NordRelayPanel.reload)window.NordRelayPanel.reload(input(root.dataset.range));},Number(root.dataset.autoRefreshMs)||10000);}
+  var countdown=root.querySelector('[data-auto-refresh-countdown]');
+  function refreshMs(){return Math.max(1000,Number(root.dataset.autoRefreshMs)||10000);}
+  function renderCountdown(){
+    if(!countdown)return;
+    if(!autoRefreshEnabled()){
+      countdown.hidden=true;
+      countdown.textContent='';
+      return;
+    }
+    countdown.hidden=false;
+    countdown.textContent='('+Math.max(0,Math.ceil(remainingMs/1000))+'s)';
+  }
+  function clearTimer(){if(timer){clearInterval(timer);timer=null;}}
+  function stop(){clearTimer();remainingMs=0;renderCountdown();}
+  function tick(){
+    if(!autoRefreshEnabled()){stop();return;}
+    remainingMs-=1000;
+    if(remainingMs<=0){
+      remainingMs=refreshMs();
+      renderCountdown();
+      if(document.visibilityState==='visible'&&window.NordRelayPanel&&window.NordRelayPanel.reload)window.NordRelayPanel.reload(input(root.dataset.range));
+      return;
+    }
+    renderCountdown();
+  }
+  function start(){clearTimer();remainingMs=refreshMs();renderCountdown();timer=setInterval(tick,1000);}
   if(checkbox)checkbox.addEventListener('change',function(){checkbox.checked?start():stop();});
   window.addEventListener('pagehide',stop);
-  if(checkbox&&checkbox.checked)start();
+  if(checkbox&&checkbox.checked)start();else renderCountdown();
   applyNodeFilters();
   if(window.NordRelayPanel&&window.NordRelayPanel.ready)window.NordRelayPanel.ready();
 })();</script>`;

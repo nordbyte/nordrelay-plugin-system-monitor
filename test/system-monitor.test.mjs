@@ -500,7 +500,9 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /width="10"/);
   assert.match(parsed.html, /metrics-chart-stack/);
   assert.match(parsed.html, /data-auto-refresh checked/);
+  assert.match(parsed.html, /data-auto-refresh-countdown/);
   assert.match(parsed.html, /autoRefresh:autoRefreshEnabled\(\)/);
+  assert.match(parsed.html, /Math\.ceil\(remainingMs\/1000\)/);
   assert.match(parsed.html, /if\(checkbox&&checkbox\.checked\)start\(\)/);
   assert.match(parsed.html, /data-node-filter/);
   assert.match(parsed.html, /data-node-sort/);
