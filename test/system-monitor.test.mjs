@@ -519,6 +519,17 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /monitor-comparison-panel/);
   assert.match(parsed.html, /data-monitor-node-select=/);
   assert.match(parsed.html, /data-monitor-node-panel/);
+  assert.match(parsed.html, /class="section-tabs monitor-node-tabs"/);
+  assert.match(parsed.html, /data-monitor-node-tab="overview"/);
+  assert.match(parsed.html, /data-monitor-node-tab="processes"/);
+  assert.match(parsed.html, /data-monitor-node-tab="collectors"/);
+  assert.match(parsed.html, /data-monitor-node-tab="alerts"/);
+  assert.match(parsed.html, /data-monitor-node-tab="metrics"/);
+  assert.match(parsed.html, /data-monitor-node-tab-panel="overview"/);
+  assert.match(parsed.html, /data-monitor-node-tab-panel="processes" hidden/);
+  assert.match(parsed.html, /data-monitor-node-tab-panel="collectors" hidden/);
+  assert.match(parsed.html, /data-monitor-node-tab-panel="alerts" hidden/);
+  assert.match(parsed.html, /data-monitor-node-tab-panel="metrics" hidden/);
   assert.match(parsed.html, /Top process/);
   assert.match(parsed.html, /Collector diagnostics/);
   assert.match(parsed.html, /Alert history/);
@@ -560,6 +571,7 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.panel.script, /panelReload/);
   assert.match(parsed.panel.script, /selectedNodeKey:root\.dataset\.selectedNodeKey/);
   assert.match(parsed.panel.script, /selectNodePanel/);
+  assert.match(parsed.panel.script, /switchNodeTab/);
   assert.match(parsed.panel.script, /data-chart-hit-area/);
   assert.doesNotMatch(parsed.html, /<script>/i);
   assert.doesNotMatch(parsed.html, /<!doctype html>/i);

@@ -270,7 +270,8 @@ function renderNodePanel(item, range, selected = true) {
       </div>
     </div>
     <div data-node-body>
-      ${renderAlerts(alerts)}
+      ${renderNodeDetailTabs(item.monitorNodeKey)}
+      <div class="monitor-node-tab active" data-monitor-node-tab-panel="overview">
       <div class="metrics-grid">
       ${metricCard("CPU", `${formatNumber(sample.cpu?.percent)}%`, progressBar(sample.cpu?.percent))}
       ${metricCard("CPU load", formatLoadAverage(sample.cpu), "<small>1m / 5m / 15m</small>")}
@@ -284,9 +285,6 @@ function renderNodePanel(item, range, selected = true) {
       ${metricCard("Pressure", formatPressure(sample.memory?.pressure), `<small>some / full avg10</small>`)}
       ${metricCard("Thermals", Number.isFinite(thermal.maxCelsius) ? `${formatNumber(thermal.maxCelsius)}C` : "-", `<small>${escapeHtml(battery ? `Battery ${formatNumber(battery.percent)}% ${battery.status || ""}` : "No battery")}</small>`)}
       </div>
-      ${renderProcessTable(sample.processes || [])}
-      ${renderCollectorDiagnostics(sample.collectors || [])}
-      ${renderAlertHistory(panelData?.alerts?.events || [])}
       <div class="stack metrics-chart-stack">
       ${renderLineChart("CPU usage - " + range, history.points || [], [
         { key: "cpuPercent", label: "CPU", color: "#1d8a5b", max: 100 },
@@ -310,32 +308,26 @@ function renderNodePanel(item, range, selected = true) {
       ${renderDiskIoCharts(history.diskIo || [])}
       ${renderNetworkCharts(history.network || [])}
       </div>
-      <div class="data-table-wrap">
-      <table class="data-table">
-        <thead><tr><th>Metric</th><th>Value</th><th>Detail</th></tr></thead>
-        <tbody>
-          <tr><td>Samples</td><td>${escapeHtml(summary.samples ?? 0)}</td><td>${escapeHtml(formatTimeRange(history.fromMs, history.toMs))}</td></tr>
-          <tr><td>CPU range</td><td>${escapeHtml(formatNumber(summary.cpu?.min))}% - ${escapeHtml(formatNumber(summary.cpu?.max))}%</td><td>avg ${escapeHtml(formatNumber(summary.cpu?.avg))}%</td></tr>
-          <tr><td>CPU load average</td><td>${escapeHtml(formatLoadAverage(sample.cpu))}</td><td>1m / 5m / 15m</td></tr>
-          <tr><td>CPU iowait</td><td>${escapeHtml(formatNumber(summary.cpuIowait?.max))}% max</td><td>avg ${escapeHtml(formatNumber(summary.cpuIowait?.avg))}%</td></tr>
-          <tr><td>CPU cores</td><td>${escapeHtml(sample.cpu?.perCore?.length || 0)} cores</td><td>${escapeHtml(formatTopCores(sample.cpu?.perCore))}</td></tr>
-          <tr><td>Memory range</td><td>${escapeHtml(formatNumber(summary.memory?.min))}% - ${escapeHtml(formatNumber(summary.memory?.max))}%</td><td>avg ${escapeHtml(formatNumber(summary.memory?.avg))}%</td></tr>
-          <tr><td>Swap range</td><td>${escapeHtml(formatNumber(summary.swap?.min))}% - ${escapeHtml(formatNumber(summary.swap?.max))}%</td><td>avg ${escapeHtml(formatNumber(summary.swap?.avg))}%</td></tr>
-          <tr><td>Page faults</td><td>${escapeHtml(formatNumber(sample.memory?.pageFaultsPerSec))}/s</td><td>major ${escapeHtml(formatNumber(sample.memory?.majorPageFaultsPerSec))}/s</td></tr>
-          <tr><td>Real memory</td><td>${escapeHtml(formatMemoryMain(sample.memory))}</td><td>${escapeHtml(formatMemoryDetail(sample.memory))}</td></tr>
-          <tr><td>Local disk</td><td>${escapeHtml(disk ? formatDiskMain(disk) : "-")}</td><td>${escapeHtml(disk ? formatDiskDetail(disk) : "No disk data collected")}</td></tr>
-          <tr><td>Inodes</td><td>${escapeHtml(disk ? formatNumber(disk.inodesPercent) : "0")}%</td><td>${escapeHtml(disk ? formatInodeDetail(disk) : "No inode data collected")}</td></tr>
-          <tr><td>Disk I/O</td><td>${escapeHtml(formatBytes(summary.diskIo?.maxReadBytesPerSec || 0))}/s max read</td><td>${escapeHtml(formatBytes(summary.diskIo?.maxWriteBytesPerSec || 0))}/s max write - ${escapeHtml(formatNumber(summary.diskIo?.maxBusyPercent))}% busy</td></tr>
-          <tr><td>Network errors</td><td>${escapeHtml(sample.networkHealth?.errors || 0)} errors</td><td>${escapeHtml(sample.networkHealth?.drops || 0)} drops - retransmits ${escapeHtml(formatNumber(sample.networkHealth?.tcpRetransmitsPerSec))}/s</td></tr>
-          <tr><td>Storage</td><td>${escapeHtml(formatBytes(storage.sizeBytes || 0))}</td><td>${escapeHtml(storage.samples || 0)} samples retained ${escapeHtml(storage.retentionDays || "")}d</td></tr>
-          <tr><td>Storage health</td><td>${escapeHtml(storage.health?.integrity || "unknown")}</td><td>${escapeHtml(storageHealthDetail(storage))}</td></tr>
-          <tr><td>Notifications</td><td>${escapeHtml(storage.notificationRows || 0)}</td><td>Stored alert notification events</td></tr>
-        </tbody>
-      </table>
       </div>
+      <div class="monitor-node-tab" data-monitor-node-tab-panel="processes" hidden>${renderProcessTable(sample.processes || [])}</div>
+      <div class="monitor-node-tab" data-monitor-node-tab-panel="collectors" hidden>${renderCollectorDiagnostics(sample.collectors || [])}</div>
+      <div class="monitor-node-tab" data-monitor-node-tab-panel="alerts" hidden>${renderAlertHistory(panelData?.alerts?.events || [], alerts)}</div>
+      <div class="monitor-node-tab" data-monitor-node-tab-panel="metrics" hidden>${renderMetricTable({ summary, history, sample, disk, storage })}</div>
       <small>Last sample ${escapeHtml(sample.timestamp || "")}</small>
     </div>
   </section>`;
+}
+
+function renderNodeDetailTabs(nodeKey) {
+  const tabs = [
+    ["overview", "Overview"],
+    ["processes", "Top processes"],
+    ["collectors", "Collector diagnostics"],
+    ["alerts", "Alert history"],
+    ["metrics", "Metric table"],
+  ];
+  const buttons = tabs.map(([id, label], index) => `<button type="button" role="tab" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-monitor-node-tab="${escapeHtml(id)}" data-monitor-node-tab-key="${escapeHtml(nodeKey)}" class="${index === 0 ? "active" : ""}">${escapeHtml(label)}</button>`).join("");
+  return `<div class="section-tabs monitor-node-tabs" role="tablist" aria-label="Node detail sections">${buttons}</div>`;
 }
 
 function primaryDisk(disks) {
@@ -374,6 +366,49 @@ function storageHealthDetail(storage = {}) {
   return `${warningText} - WAL ${formatBytes(wal)}`;
 }
 
+function renderAlertHistory(alerts = [], currentAlerts = []) {
+  const active = renderAlerts(currentAlerts);
+  const rows = (Array.isArray(alerts) ? alerts : []).slice(0, 20).map((alert) => `<tr>
+    <td>${escapeHtml(alert.timestamp || "")}</td>
+    <td>${uiBadge(alert.level || "warning", alert.level === "critical" ? "failed" : "warning")}</td>
+    <td>${escapeHtml(alert.label || "")}</td>
+    <td>${escapeHtml(formatNumber(alert.value))}${escapeHtml(alert.unit || "")}</td>
+    <td>${escapeHtml(formatNumber(alert.threshold))}${escapeHtml(alert.unit || "")}</td>
+  </tr>`).join("");
+  return `${active}<div class="data-table-wrap">
+    <table class="data-table">
+      <thead><tr><th>Time</th><th>Level</th><th>Alert</th><th>Value</th><th>Threshold</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="5">No alerts in this range.</td></tr>'}</tbody>
+    </table>
+  </div>`;
+}
+
+function renderMetricTable({ summary = {}, history = {}, sample = {}, disk = null, storage = {} }) {
+  return `<div class="data-table-wrap">
+    <table class="data-table">
+      <thead><tr><th>Metric</th><th>Value</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td>Samples</td><td>${escapeHtml(summary.samples ?? 0)}</td><td>${escapeHtml(formatTimeRange(history.fromMs, history.toMs))}</td></tr>
+        <tr><td>CPU range</td><td>${escapeHtml(formatNumber(summary.cpu?.min))}% - ${escapeHtml(formatNumber(summary.cpu?.max))}%</td><td>avg ${escapeHtml(formatNumber(summary.cpu?.avg))}%</td></tr>
+        <tr><td>CPU load average</td><td>${escapeHtml(formatLoadAverage(sample.cpu))}</td><td>1m / 5m / 15m</td></tr>
+        <tr><td>CPU iowait</td><td>${escapeHtml(formatNumber(summary.cpuIowait?.max))}% max</td><td>avg ${escapeHtml(formatNumber(summary.cpuIowait?.avg))}%</td></tr>
+        <tr><td>CPU cores</td><td>${escapeHtml(sample.cpu?.perCore?.length || 0)} cores</td><td>${escapeHtml(formatTopCores(sample.cpu?.perCore))}</td></tr>
+        <tr><td>Memory range</td><td>${escapeHtml(formatNumber(summary.memory?.min))}% - ${escapeHtml(formatNumber(summary.memory?.max))}%</td><td>avg ${escapeHtml(formatNumber(summary.memory?.avg))}%</td></tr>
+        <tr><td>Swap range</td><td>${escapeHtml(formatNumber(summary.swap?.min))}% - ${escapeHtml(formatNumber(summary.swap?.max))}%</td><td>avg ${escapeHtml(formatNumber(summary.swap?.avg))}%</td></tr>
+        <tr><td>Page faults</td><td>${escapeHtml(formatNumber(sample.memory?.pageFaultsPerSec))}/s</td><td>major ${escapeHtml(formatNumber(sample.memory?.majorPageFaultsPerSec))}/s</td></tr>
+        <tr><td>Real memory</td><td>${escapeHtml(formatMemoryMain(sample.memory))}</td><td>${escapeHtml(formatMemoryDetail(sample.memory))}</td></tr>
+        <tr><td>Local disk</td><td>${escapeHtml(disk ? formatDiskMain(disk) : "-")}</td><td>${escapeHtml(disk ? formatDiskDetail(disk) : "No disk data collected")}</td></tr>
+        <tr><td>Inodes</td><td>${escapeHtml(disk ? formatNumber(disk.inodesPercent) : "0")}%</td><td>${escapeHtml(disk ? formatInodeDetail(disk) : "No inode data collected")}</td></tr>
+        <tr><td>Disk I/O</td><td>${escapeHtml(formatBytes(summary.diskIo?.maxReadBytesPerSec || 0))}/s max read</td><td>${escapeHtml(formatBytes(summary.diskIo?.maxWriteBytesPerSec || 0))}/s max write - ${escapeHtml(formatNumber(summary.diskIo?.maxBusyPercent))}% busy</td></tr>
+        <tr><td>Network errors</td><td>${escapeHtml(sample.networkHealth?.errors || 0)} errors</td><td>${escapeHtml(sample.networkHealth?.drops || 0)} drops - retransmits ${escapeHtml(formatNumber(sample.networkHealth?.tcpRetransmitsPerSec))}/s</td></tr>
+        <tr><td>Storage</td><td>${escapeHtml(formatBytes(storage.sizeBytes || 0))}</td><td>${escapeHtml(storage.samples || 0)} samples retained ${escapeHtml(storage.retentionDays || "")}d</td></tr>
+        <tr><td>Storage health</td><td>${escapeHtml(storage.health?.integrity || "unknown")}</td><td>${escapeHtml(storageHealthDetail(storage))}</td></tr>
+        <tr><td>Notifications</td><td>${escapeHtml(storage.notificationRows || 0)}</td><td>Stored alert notification events</td></tr>
+      </tbody>
+    </table>
+  </div>`;
+}
+
 function renderCollectorDiagnostics(collectors = []) {
   const rows = (Array.isArray(collectors) ? collectors : []).map((collector) => `<tr>
     <td>${escapeHtml(collector.name || "-")}</td>
@@ -382,32 +417,12 @@ function renderCollectorDiagnostics(collectors = []) {
     <td>${escapeHtml(collector.failures || 0)}</td>
     <td>${escapeHtml(collector.lastError || "")}</td>
   </tr>`).join("");
-  return `<details class="panel-details"><summary>Collector diagnostics (${escapeHtml((collectors || []).length)})</summary>
-    <div class="data-table-wrap">
-      <table class="data-table">
-        <thead><tr><th>Collector</th><th>Status</th><th>Duration</th><th>Failures</th><th>Last error</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="5">No collector diagnostics.</td></tr>'}</tbody>
-      </table>
-    </div>
-  </details>`;
-}
-
-function renderAlertHistory(alerts = []) {
-  const rows = (Array.isArray(alerts) ? alerts : []).slice(0, 20).map((alert) => `<tr>
-    <td>${escapeHtml(alert.timestamp || "")}</td>
-    <td>${uiBadge(alert.level || "warning", alert.level === "critical" ? "failed" : "warning")}</td>
-    <td>${escapeHtml(alert.label || "")}</td>
-    <td>${escapeHtml(formatNumber(alert.value))}${escapeHtml(alert.unit || "")}</td>
-    <td>${escapeHtml(formatNumber(alert.threshold))}${escapeHtml(alert.unit || "")}</td>
-  </tr>`).join("");
-  return `<details class="panel-details"><summary>Alert history (${escapeHtml((alerts || []).length)})</summary>
-    <div class="data-table-wrap">
-      <table class="data-table">
-        <thead><tr><th>Time</th><th>Level</th><th>Alert</th><th>Value</th><th>Threshold</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="5">No alerts in this range.</td></tr>'}</tbody>
-      </table>
-    </div>
-  </details>`;
+  return `<div class="data-table-wrap">
+    <table class="data-table">
+      <thead><tr><th>Collector</th><th>Status</th><th>Duration</th><th>Failures</th><th>Last error</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="5">No collector diagnostics.</td></tr>'}</tbody>
+    </table>
+  </div>`;
 }
 
 function renderAlerts(alerts) {
@@ -605,11 +620,29 @@ export function dashboardPanelScript() {
   function selectNodePanel(key){
     if(!key)return;
     root.dataset.selectedNodeKey=key;
+    var selectedPanel=null;
     root.querySelectorAll('[data-monitor-node-panel]').forEach(function(panel){
-      panel.hidden=panel.dataset.monitorNodeKey!==key;
+      var selected=panel.dataset.monitorNodeKey===key;
+      panel.hidden=!selected;
+      if(selected)selectedPanel=panel;
     });
     root.querySelectorAll('[data-monitor-node-row]').forEach(function(row){
       row.classList.toggle('selected',row.dataset.monitorNodeKey===key);
+    });
+    switchNodeTab(selectedPanel,'overview');
+  }
+  function switchNodeTab(panel,tab){
+    if(!panel||!tab)return;
+    panel.querySelectorAll('[data-monitor-node-tab]').forEach(function(button){
+      var active=button.dataset.monitorNodeTab===tab;
+      button.classList.toggle('active',active);
+      button.setAttribute('aria-selected',active?'true':'false');
+      button.tabIndex=active?0:-1;
+    });
+    panel.querySelectorAll('[data-monitor-node-tab-panel]').forEach(function(tabPanel){
+      var active=tabPanel.dataset.monitorNodeTabPanel===tab;
+      tabPanel.classList.toggle('active',active);
+      tabPanel.hidden=!active;
     });
   }
   root.querySelectorAll('[data-monitor-node-select]').forEach(function(button){
@@ -622,6 +655,12 @@ export function dashboardPanelScript() {
     row.addEventListener('click',function(event){
       if(event.target&&event.target.closest&&event.target.closest('button,a,input,select,label'))return;
       selectNodePanel(row.dataset.monitorNodeKey);
+    });
+  });
+  root.querySelectorAll('[data-monitor-node-tab]').forEach(function(button){
+    button.addEventListener('click',function(event){
+      event.preventDefault();
+      switchNodeTab(button.closest('[data-monitor-node-panel]'),button.dataset.monitorNodeTab);
     });
   });
   root.querySelectorAll('[data-range-button]').forEach(function(button){
