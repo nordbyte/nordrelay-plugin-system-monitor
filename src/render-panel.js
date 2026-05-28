@@ -540,6 +540,7 @@ function renderLineChart(title, points, series, unit = "", formatter = (value) =
     tooltip: chartTooltip(point, series, formatter),
   }));
   const chartPointsJson = escapeHtml(JSON.stringify(chartPoints));
+  const timeAxis = renderChartTimeAxis(rows, minTs, maxTs);
   const legend = series.map((line) => `<span class="chip chart-legend-item"><svg class="chart-legend-dot" aria-hidden="true" viewBox="0 0 9 9" width="9" height="9"><circle cx="4.5" cy="4.5" r="4.5" fill="${escapeHtml(line.color)}"></circle></svg>${escapeHtml(line.label)}</span>`).join("");
   const latest = rows.at(-1) || {};
   const latestText = series.map((line) => `${line.label}: ${formatter(Number(latest[line.key]) || 0)}`).join(" | ");
@@ -557,9 +558,38 @@ function renderLineChart(title, points, series, unit = "", formatter = (value) =
       </svg>
       <div class="chart-tooltip" data-chart-tooltip-popup hidden></div>
     </div>
+    ${timeAxis}
     <div class="row chart-legend">${legend}</div>
     <small class="chart-tooltip-note">Hover the chart for exact values.</small>
   </div>`;
+}
+
+function renderChartTimeAxis(rows, minTs, maxTs) {
+  const labels = chartTimeLabels(rows, minTs, maxTs);
+  if (!labels.length) return "";
+  return `<div class="chart-time-axis" aria-hidden="true">${labels.map((label) => `<span>${escapeHtml(label)}</span>`).join("")}</div>`;
+}
+
+function chartTimeLabels(rows, minTs, maxTs) {
+  if (!Array.isArray(rows) || rows.length < 2) return [];
+  const labelCount = Math.min(5, Math.max(2, rows.length));
+  const indexes = new Set();
+  for (let index = 0; index < labelCount; index += 1) {
+    indexes.add(Math.round((index / Math.max(1, labelCount - 1)) * (rows.length - 1)));
+  }
+  return [...indexes].sort((a, b) => a - b).map((index) => formatChartTimeLabel(Number(rows[index]?.timestamp), minTs, maxTs));
+}
+
+function formatChartTimeLabel(timestamp, minTs, maxTs) {
+  const date = new Date(timestamp);
+  const rangeMs = Math.max(0, Number(maxTs) - Number(minTs));
+  if (rangeMs <= 24 * 60 * 60 * 1000) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  if (rangeMs <= 7 * 24 * 60 * 60 * 1000) {
+    return date.toLocaleDateString([], { weekday: "short", hour: "2-digit" });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 function downsampleRows(rows, limit) {

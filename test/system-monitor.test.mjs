@@ -538,6 +538,7 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /data-chart-hit-area/);
   assert.match(parsed.html, /data-chart-tooltip-popup/);
   assert.match(parsed.html, /class="chart-axis-label/);
+  assert.match(parsed.html, /class="chart-time-axis"/);
   assert.match(parsed.html, /class="row chart-legend"/);
   assert.match(parsed.html, /Hover the chart for exact values/);
   assert.match(parsed.html, /CPU usage - 90m/);
