@@ -808,19 +808,26 @@ export function dashboardPanelScript() {
   function stop(){clearTimer();nextRefreshAt=0;remainingMs=0;renderCountdown();}
   function scheduleNext(){nextRefreshAt=Date.now()+refreshMs();}
   function isCurrentAutoRefreshInstance(){return typeof window==='undefined'||window[autoRefreshStateKey]===stateHandle;}
+  function isPanelVisible(){
+    if(typeof api!=='undefined'&&api&&typeof api.isVisible==='function')return api.isVisible();
+    if(!root||!root.isConnected||root.hidden)return false;
+    var page=root.closest&&root.closest('.page');
+    return !page||page.classList.contains('active');
+  }
   function tick(){
     if(!isCurrentAutoRefreshInstance()){stop();return;}
+    if(!isPanelVisible()){stop();return;}
     if(!autoRefreshEnabled()){stop();return;}
     remainingMs=nextRefreshAt-Date.now();
     if(remainingMs<=0){
       scheduleNext();
       renderCountdown();
-      if(document.visibilityState==='visible')panelReload(input(root.dataset.range));
+      if(document.visibilityState==='visible'&&isPanelVisible())panelReload(input(root.dataset.range));
       return;
     }
     renderCountdown();
   }
-  function start(){clearTimer();scheduleNext();renderCountdown();timer=(typeof api!=='undefined'&&api&&api.setInterval?api.setInterval(tick,1000):setInterval(tick,1000));}
+  function start(){if(!isPanelVisible())return;clearTimer();scheduleNext();renderCountdown();timer=(typeof api!=='undefined'&&api&&api.setInterval?api.setInterval(tick,1000):setInterval(tick,1000));}
   var stateHandle={stop:stop};
   if(typeof window!=='undefined')window[autoRefreshStateKey]=stateHandle;
   if(typeof api!=='undefined'&&api&&api.onCleanup)api.onCleanup(function(){stop();if(typeof window!=='undefined'&&window[autoRefreshStateKey]===stateHandle)window[autoRefreshStateKey]=null;});
