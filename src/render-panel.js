@@ -62,13 +62,14 @@ export function renderDashboardPanel(input = {}, context = {}, settings = { auto
     .sort((a, b) => b.stressScore - a.stressScore);
   const monitorNodes = assignMonitorNodeKeys(nodes);
   const selectedNodeKey = selectedMonitorNodeKey(monitorNodes, input.selectedNodeKey);
+  const selectedNodeTab = normalizeNodeDetailTab(input.selectedNodeTab);
   const rangeState = panelRangeState(input);
   const range = rangeState.range;
   const maxPoints = numberInput(input.maxPoints, 240);
   const autoRefreshMs = Math.max(1000, numberInput(input.autoRefreshMs, settings.autoRefreshMs));
   const autoRefresh = input.autoRefresh === true || input.autoRefresh === "true";
-  const panels = monitorNodes.map((item) => renderNodePanel(item, range, item.monitorNodeKey === selectedNodeKey)).join("");
-  return `<div class="stack" data-system-monitor data-range="${escapeHtml(rangeState.preset || "")}" data-range-ms="${rangeState.rangeMs ? escapeHtml(rangeState.rangeMs) : ""}" data-max-points="${escapeHtml(maxPoints)}" data-auto-refresh-ms="${escapeHtml(autoRefreshMs)}" data-auto-refresh-enabled="${autoRefresh ? "true" : "false"}" data-selected-node-key="${escapeHtml(selectedNodeKey)}">
+  const panels = monitorNodes.map((item) => renderNodePanel(item, range, item.monitorNodeKey === selectedNodeKey, selectedNodeTab)).join("");
+  return `<div class="stack" data-system-monitor data-range="${escapeHtml(rangeState.preset || "")}" data-range-ms="${rangeState.rangeMs ? escapeHtml(rangeState.rangeMs) : ""}" data-max-points="${escapeHtml(maxPoints)}" data-auto-refresh-ms="${escapeHtml(autoRefreshMs)}" data-auto-refresh-enabled="${autoRefresh ? "true" : "false"}" data-selected-node-key="${escapeHtml(selectedNodeKey)}" data-selected-node-tab="${escapeHtml(selectedNodeTab)}">
     <div class="section-header">
       <div>
         <h1>System Monitor <small>- ${escapeHtml(nodes.length)} node${nodes.length === 1 ? "" : "s"}</small></h1>
@@ -79,7 +80,6 @@ export function renderDashboardPanel(input = {}, context = {}, settings = { auto
         <label class="row mini-control"><span>Custom minutes</span><input type="number" min="1" step="1" value="${rangeState.customMinutes ? escapeHtml(rangeState.customMinutes) : ""}" data-custom-minutes placeholder="90"></label>
         <button type="button" class="secondary mini-button" data-custom-range-apply>Apply</button>
         <label class="checkbox"><input type="checkbox" data-auto-refresh${autoRefresh ? " checked" : ""}> <span>Auto refresh <span data-auto-refresh-countdown${autoRefresh ? "" : " hidden"}></span></span></label>
-        ${uiBadge(results.length ? "aggregate" : "local", results.length ? "enabled" : "warning")}
       </div>
     </div>
     <div class="panel compact-panel">
@@ -94,6 +94,11 @@ export function renderDashboardPanel(input = {}, context = {}, settings = { auto
     ${renderComparisonTable(monitorNodes, selectedNodeKey)}
     ${panels || '<div class="empty-state">No monitor data available.</div>'}
   </div>`;
+}
+
+function normalizeNodeDetailTab(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["overview", "processes", "collectors", "alerts", "metrics"].includes(normalized) ? normalized : "overview";
 }
 
 function assignMonitorNodeKeys(nodes) {
@@ -229,7 +234,7 @@ function monitorSample(item) {
   return panelData?.current || item.result?.output?.sample || item.result?.sample || item.output?.sample;
 }
 
-function renderNodePanel(item, range, selected = true) {
+function renderNodePanel(item, range, selected = true, selectedNodeTab = "overview") {
   const node = item.node || {};
   if (!item.ok) {
     return `<section class="panel monitor-node-panel" data-monitor-node-panel data-monitor-node-key="${escapeHtml(item.monitorNodeKey)}" data-node-name="${escapeHtml(node.name || node.id || "Node")}" data-node-alerts="0" data-node-stress="-1" data-node-cpu="0" data-node-memory="0"${selected ? "" : " hidden"}>
@@ -270,8 +275,8 @@ function renderNodePanel(item, range, selected = true) {
       </div>
     </div>
     <div data-node-body>
-      ${renderNodeDetailTabs(item.monitorNodeKey)}
-      <div class="monitor-node-tab active" data-monitor-node-tab-panel="overview">
+      ${renderNodeDetailTabs(item.monitorNodeKey, selectedNodeTab)}
+      <div class="monitor-node-tab ${selectedNodeTab === "overview" ? "active" : ""}" data-monitor-node-tab-panel="overview"${selectedNodeTab === "overview" ? "" : " hidden"}>
       <div class="metrics-grid">
       ${metricCard("CPU", `${formatNumber(sample.cpu?.percent)}%`, progressBar(sample.cpu?.percent))}
       ${metricCard("CPU load", formatLoadAverage(sample.cpu), "<small>1m / 5m / 15m</small>")}
@@ -309,16 +314,16 @@ function renderNodePanel(item, range, selected = true) {
       ${renderNetworkCharts(history.network || [])}
       </div>
       </div>
-      <div class="monitor-node-tab" data-monitor-node-tab-panel="processes" hidden>${renderProcessTable(sample.processes || [])}</div>
-      <div class="monitor-node-tab" data-monitor-node-tab-panel="collectors" hidden>${renderCollectorDiagnostics(sample.collectors || [])}</div>
-      <div class="monitor-node-tab" data-monitor-node-tab-panel="alerts" hidden>${renderAlertHistory(panelData?.alerts?.events || [], alerts)}</div>
-      <div class="monitor-node-tab" data-monitor-node-tab-panel="metrics" hidden>${renderMetricTable({ summary, history, sample, disk, storage })}</div>
+      <div class="monitor-node-tab ${selectedNodeTab === "processes" ? "active" : ""}" data-monitor-node-tab-panel="processes"${selectedNodeTab === "processes" ? "" : " hidden"}>${renderProcessTable(sample.processes || [])}</div>
+      <div class="monitor-node-tab ${selectedNodeTab === "collectors" ? "active" : ""}" data-monitor-node-tab-panel="collectors"${selectedNodeTab === "collectors" ? "" : " hidden"}>${renderCollectorDiagnostics(sample.collectors || [])}</div>
+      <div class="monitor-node-tab ${selectedNodeTab === "alerts" ? "active" : ""}" data-monitor-node-tab-panel="alerts"${selectedNodeTab === "alerts" ? "" : " hidden"}>${renderAlertHistory(panelData?.alerts?.events || [], alerts)}</div>
+      <div class="monitor-node-tab ${selectedNodeTab === "metrics" ? "active" : ""}" data-monitor-node-tab-panel="metrics"${selectedNodeTab === "metrics" ? "" : " hidden"}>${renderMetricTable({ summary, history, sample, disk, storage })}</div>
       <small>Last sample ${escapeHtml(sample.timestamp || "")}</small>
     </div>
   </section>`;
 }
 
-function renderNodeDetailTabs(nodeKey) {
+function renderNodeDetailTabs(nodeKey, activeTab = "overview") {
   const tabs = [
     ["overview", "Overview"],
     ["processes", "Top processes"],
@@ -326,7 +331,10 @@ function renderNodeDetailTabs(nodeKey) {
     ["alerts", "Alert history"],
     ["metrics", "Metric table"],
   ];
-  const buttons = tabs.map(([id, label], index) => `<button type="button" role="tab" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-monitor-node-tab="${escapeHtml(id)}" data-monitor-node-tab-key="${escapeHtml(nodeKey)}" class="${index === 0 ? "active" : ""}">${escapeHtml(label)}</button>`).join("");
+  const buttons = tabs.map(([id, label]) => {
+    const active = id === activeTab;
+    return `<button type="button" role="tab" aria-selected="${active ? "true" : "false"}" tabindex="${active ? "0" : "-1"}" data-monitor-node-tab="${escapeHtml(id)}" data-monitor-node-tab-key="${escapeHtml(nodeKey)}" class="${active ? "active" : ""}">${escapeHtml(label)}</button>`;
+  }).join("");
   return `<div class="section-tabs monitor-node-tabs" role="tablist" aria-label="Node detail sections">${buttons}</div>`;
 }
 
@@ -641,14 +649,15 @@ export function dashboardPanelScript() {
     return !!(checkbox&&checkbox.checked);
   }
   function input(range){
-    var payload={maxPoints:Number(root.dataset.maxPoints)||240,autoRefresh:autoRefreshEnabled(),autoRefreshMs:Number(root.dataset.autoRefreshMs)||10000,selectedNodeKey:root.dataset.selectedNodeKey||''};
+    var payload={maxPoints:Number(root.dataset.maxPoints)||240,autoRefresh:autoRefreshEnabled(),autoRefreshMs:Number(root.dataset.autoRefreshMs)||10000,selectedNodeKey:root.dataset.selectedNodeKey||'',selectedNodeTab:root.dataset.selectedNodeTab||'overview'};
     if(range){payload.range=range;return payload;}
     if(root.dataset.rangeMs){payload.rangeMs=Number(root.dataset.rangeMs)||3600000;return payload;}
     payload.range=root.dataset.range||'${DEFAULT_RANGE}';
     return payload;
   }
-  function selectNodePanel(key){
+  function selectNodePanel(key,tab){
     if(!key)return;
+    tab=tab||'overview';
     root.dataset.selectedNodeKey=key;
     var selectedPanel=null;
     root.querySelectorAll('[data-monitor-node-panel]').forEach(function(panel){
@@ -659,10 +668,12 @@ export function dashboardPanelScript() {
     root.querySelectorAll('[data-monitor-node-row]').forEach(function(row){
       row.classList.toggle('selected',row.dataset.monitorNodeKey===key);
     });
-    switchNodeTab(selectedPanel,'overview');
+    root.dataset.selectedNodeTab=tab;
+    switchNodeTab(selectedPanel,tab);
   }
   function switchNodeTab(panel,tab){
     if(!panel||!tab)return;
+    root.dataset.selectedNodeTab=tab;
     panel.querySelectorAll('[data-monitor-node-tab]').forEach(function(button){
       var active=button.dataset.monitorNodeTab===tab;
       button.classList.toggle('active',active);
@@ -678,13 +689,13 @@ export function dashboardPanelScript() {
   root.querySelectorAll('[data-monitor-node-select]').forEach(function(button){
     button.addEventListener('click',function(event){
       event.preventDefault();
-      selectNodePanel(button.dataset.monitorNodeSelect);
+      selectNodePanel(button.dataset.monitorNodeSelect,'overview');
     });
   });
   root.querySelectorAll('[data-monitor-node-row]').forEach(function(row){
     row.addEventListener('click',function(event){
       if(event.target&&event.target.closest&&event.target.closest('button,a,input,select,label'))return;
-      selectNodePanel(row.dataset.monitorNodeKey);
+      selectNodePanel(row.dataset.monitorNodeKey,'overview');
     });
   });
   root.querySelectorAll('[data-monitor-node-tab]').forEach(function(button){
@@ -700,7 +711,7 @@ export function dashboardPanelScript() {
   var customMinutes=root.querySelector('[data-custom-minutes]');
   if(customApply&&customMinutes)customApply.addEventListener('click',function(){
     var minutes=Math.max(1,Number(customMinutes.value)||0);
-    if(minutes)panelReload({rangeMs:minutes*60000,maxPoints:Number(root.dataset.maxPoints)||240,autoRefresh:autoRefreshEnabled(),autoRefreshMs:Number(root.dataset.autoRefreshMs)||10000});
+    if(minutes)panelReload({rangeMs:minutes*60000,maxPoints:Number(root.dataset.maxPoints)||240,autoRefresh:autoRefreshEnabled(),autoRefreshMs:Number(root.dataset.autoRefreshMs)||10000,selectedNodeKey:root.dataset.selectedNodeKey||'',selectedNodeTab:root.dataset.selectedNodeTab||'overview'});
   });
   function applyNodeFilters(){
     var text=(root.querySelector('[data-node-filter]')&&root.querySelector('[data-node-filter]').value||'').toLowerCase();
@@ -864,6 +875,6 @@ export function dashboardPanelScript() {
   if(checkbox)checkbox.addEventListener('change',function(){checkbox.checked?start():stop();});
   if(typeof api!=='undefined'&&api&&api.addEventListener)api.addEventListener(window,'pagehide',stop);else window.addEventListener('pagehide',stop);
   if(checkbox&&checkbox.checked)start();else renderCountdown();
-  selectNodePanel(root.dataset.selectedNodeKey);
+  selectNodePanel(root.dataset.selectedNodeKey,root.dataset.selectedNodeTab||'overview');
   applyNodeFilters();`;
 }

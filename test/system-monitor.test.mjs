@@ -497,6 +497,9 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /class="metrics-grid"/);
   assert.match(parsed.html, /data-range-ms="5400000"/);
   assert.match(parsed.html, /data-auto-refresh-ms="15000"/);
+  assert.match(parsed.html, /data-selected-node-tab="overview"/);
+  assert.doesNotMatch(parsed.html, />aggregate</);
+  assert.doesNotMatch(parsed.html, />local</);
   assert.match(parsed.html, /class="panel"/);
   assert.match(parsed.html, /class="progress-svg/);
   assert.match(parsed.html, /aria-valuenow="10"/);
@@ -571,6 +574,7 @@ test("renders the web panel with NordRelay shared plugin UI classes", async () =
   assert.match(parsed.html, /Swap/);
   assert.match(parsed.panel.script, /panelReload/);
   assert.match(parsed.panel.script, /selectedNodeKey:root\.dataset\.selectedNodeKey/);
+  assert.match(parsed.panel.script, /selectedNodeTab:root\.dataset\.selectedNodeTab/);
   assert.match(parsed.panel.script, /selectNodePanel/);
   assert.match(parsed.panel.script, /switchNodeTab/);
   assert.match(parsed.panel.script, /data-chart-hit-area/);
@@ -617,6 +621,7 @@ test("shows only the local node details by default and can switch nodes", () => 
     pluginId: "system-monitor",
     panelId: "dashboard",
     input: {
+      selectedNodeTab: "processes",
       aggregate: {
         results: [
           nodeResult("remote-1", "Remote node", 80),
@@ -637,8 +642,12 @@ test("shows only the local node details by default and can switch nodes", () => 
   assert.equal(result.status, 0, result.stderr);
   const parsed = JSON.parse(result.stdout);
   assert.match(parsed.html, /data-selected-node-key="local"/);
+  assert.match(parsed.html, /data-selected-node-tab="processes"/);
   assert.match(parsed.html, /data-monitor-node-key="local"[^>]*class="selected"/);
   assert.match(parsed.html, /data-monitor-node-key="local"[^>]*>\s*<div class="section-header">/);
   assert.match(parsed.html, /data-monitor-node-key="remote-1"[^>]* hidden>/);
+  assert.match(parsed.html, /data-monitor-node-tab="processes"[^>]*class="active"/);
+  assert.match(parsed.html, /data-monitor-node-tab-panel="overview" hidden/);
+  assert.match(parsed.html, /data-monitor-node-tab-panel="processes"><div class="data-table-wrap">/);
   assert.doesNotMatch(parsed.html, /Swap - 1h/);
 });
