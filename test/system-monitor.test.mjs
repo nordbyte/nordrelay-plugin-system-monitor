@@ -209,6 +209,27 @@ test("collects a sample through the NordRelay plugin request contract", async ()
   assert.equal(existsSync(path.join(dataDir, "samples.jsonl")), false);
 });
 
+test("reuses recent scheduled collector samples instead of collecting again", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "nordrelay-system-monitor-"));
+  const payload = {
+    protocolVersion: 1,
+    type: "collector",
+    pluginId: "system-monitor",
+    collectorId: "system.sample",
+    input: { scheduled: true },
+    settings: testSettings({ sampleIntervalMs: 60000 }),
+    dataDir,
+    permissions: ["system.metrics.read"],
+    context: { runtime: { nodeName: "test-node", platform: process.platform } },
+  };
+  const first = invokePlugin(payload);
+  const second = invokePlugin(payload);
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(second.output.sample.id, first.output.sample.id);
+  assert.equal(second.output.sample.reused, true);
+});
+
 test("returns chart-ready panel data from SQLite history", async () => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "nordrelay-system-monitor-"));
   const basePayload = {

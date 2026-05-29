@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { cpus, freemem, hostname, loadavg, platform, release, totalmem, uptime } from "node:os";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -226,7 +226,27 @@ async function handleCommand(request, db, dataDir, settings) {
 }
 
 async function collectAndStoreSample(db, dataDir, settings, request) {
-  const state = await readState(dataDir);
+  const throttle = shouldThrottleSample(request);
+  const fresh = throttle ? reusableLatestSample(db, await readState(dataDir), settings) : null;
+  if (fresh) return fresh;
+
+  const lock = throttle ? await tryAcquireSampleLock(dataDir, Math.max(3000, settings.sampleIntervalMs * 2)) : null;
+  if (throttle && !lock?.acquired) {
+    const latest = readLatestSample(db);
+    if (latest) return { ...latest, reused: true, reuseReason: "collector-already-running" };
+  }
+
+  try {
+    const state = await readState(dataDir);
+    const lockedFresh = throttle ? reusableLatestSample(db, state, settings) : null;
+    if (lockedFresh) return lockedFresh;
+    return await collectAndStoreSampleUnlocked(db, dataDir, settings, request, state);
+  } finally {
+    await lock?.release?.();
+  }
+}
+
+async function collectAndStoreSampleUnlocked(db, dataDir, settings, request, state) {
   const collectorDiagnostics = [];
   const previousCollectors = state.collectors || {};
   const collect = (name, fallback, collector) => collectMetric(name, fallback, collector, previousCollectors, collectorDiagnostics);
@@ -304,6 +324,57 @@ async function collectAndStoreSample(db, dataDir, settings, request) {
     lastCleanupAtMs: state.lastCleanupAtMs,
   });
   return { ...sample, id, notifications };
+}
+
+function shouldThrottleSample(request) {
+  return request.type === "collector" || request.input?.scheduled === true;
+}
+
+function reusableLatestSample(db, state, settings) {
+  const latest = readLatestSample(db);
+  const lastSampleAtMs = Number(state.lastSampleAtMs || latest?.timestampMs || 0);
+  const minIntervalMs = Math.max(1000, Number(settings.sampleIntervalMs) || 5000);
+  if (!latest || !lastSampleAtMs || Date.now() - lastSampleAtMs >= minIntervalMs) {
+    return null;
+  }
+  return { ...latest, reused: true, reuseReason: "sample-interval" };
+}
+
+async function tryAcquireSampleLock(dataDir, ttlMs) {
+  const lockPath = path.join(dataDir, "sample.lock");
+  const token = `${process.pid}:${Date.now()}`;
+  const acquire = async () => {
+    const handle = await open(lockPath, "wx");
+    await handle.writeFile(token, "utf8");
+    await handle.close();
+    return {
+      acquired: true,
+      release: async () => {
+        try {
+          const current = await readFile(lockPath, "utf8");
+          if (current === token) await rm(lockPath, { force: true });
+        } catch {
+          // Best-effort lock cleanup.
+        }
+      },
+    };
+  };
+  try {
+    return await acquire();
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    try {
+      const raw = await readFile(lockPath, "utf8");
+      const [, timestamp] = raw.split(":");
+      if (Date.now() - Number(timestamp || 0) > ttlMs) {
+        await rm(lockPath, { force: true });
+        return await acquire();
+      }
+    } catch {
+      // Treat unreadable locks as active; the next run can retry.
+    }
+    return { acquired: false };
+  }
 }
 
 async function ensureFreshSample(db, dataDir, settings, request) {
