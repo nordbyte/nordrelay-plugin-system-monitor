@@ -1,7 +1,7 @@
 {
   "id": "system-monitor",
   "name": "System Monitor",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Collects CPU, memory, disk, disk I/O, network, pressure, thermal, battery, and history metrics and renders a peer dashboard.",
   "author": "Ricardo <github@nordbyte.de>",
   "homepage": "https://github.com/nordbyte/nordrelay-plugin-system-monitor",
