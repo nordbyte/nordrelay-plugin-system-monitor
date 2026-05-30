@@ -57,7 +57,9 @@ function numberInput(value, fallback) {
 export function renderDashboardPanel(input = {}, context = {}, settings = { autoRefreshMs: 10000 }) {
   const aggregate = input.aggregate && typeof input.aggregate === "object" ? input.aggregate : {};
   const results = Array.isArray(aggregate.results) ? aggregate.results : [];
-  const nodes = (results.length ? results : [{ node: context.runtime || { name: "Local node" }, ok: false, error: "No aggregate data available." }])
+  const pending = aggregatePendingNodes(aggregate, results);
+  const nodeItems = results.length || pending.length ? [...results, ...pending] : [{ node: context.runtime || { name: "Local node" }, ok: false, error: "No aggregate data available." }];
+  const nodes = nodeItems
     .map((item) => ({ ...item, stressScore: nodeStressScore(item) }))
     .sort((a, b) => b.stressScore - a.stressScore);
   const monitorNodes = assignMonitorNodeKeys(nodes);
@@ -73,7 +75,7 @@ export function renderDashboardPanel(input = {}, context = {}, settings = { auto
     <div class="section-header">
       <div>
         <h1>System Monitor <small>- ${escapeHtml(nodes.length)} node${nodes.length === 1 ? "" : "s"}</small></h1>
-        <small>SQLite-backed history with downsampled charts.</small>
+        <small>SQLite-backed history with downsampled charts.${pending.length ? ` ${escapeHtml(results.length)} loaded, ${escapeHtml(pending.length)} pending.` : ""}</small>
       </div>
       <div class="row">
         ${renderRangeButtons(rangeState.preset || "")}
@@ -94,6 +96,19 @@ export function renderDashboardPanel(input = {}, context = {}, settings = { auto
     ${renderComparisonTable(monitorNodes, selectedNodeKey)}
     ${panels || '<div class="empty-state">No monitor data available.</div>'}
   </div>`;
+}
+
+function aggregatePendingNodes(aggregate, results) {
+  const pending = Array.isArray(aggregate.pending) ? aggregate.pending : [];
+  if (!pending.length) return [];
+  const done = new Set((Array.isArray(results) ? results : []).map((item, index) => aggregateNodeKey(item?.node || {}, index)).filter(Boolean));
+  return pending
+    .map((node, index) => ({ node, ok: false, pending: true, loading: true, error: "Loading metrics...", __pendingIndex: index }))
+    .filter((item) => !done.has(aggregateNodeKey(item.node || {}, item.__pendingIndex)));
+}
+
+function aggregateNodeKey(node, index) {
+  return String(node?.id || node?.nodeId || node?.name || `node-${index + 1}`);
 }
 
 function normalizeNodeDetailTab(value) {
@@ -166,6 +181,9 @@ function renderComparisonTable(nodes, selectedNodeKey) {
     const sample = monitorSample(item);
     const name = item.node?.name || sample?.node?.name || item.node?.id || "Node";
     const selected = item.monitorNodeKey === selectedNodeKey;
+    if (item.pending) {
+      return `<tr data-monitor-node-row data-monitor-node-key="${escapeHtml(item.monitorNodeKey)}" data-node-name="${escapeHtml(name)}" data-node-alerts="0" data-node-stress="-0.5" data-node-cpu="0" data-node-memory="0" class="${selected ? "selected" : ""}"><td><button type="button" class="monitor-node-select" data-monitor-node-select="${escapeHtml(item.monitorNodeKey)}">${escapeHtml(name)}</button></td><td colspan="6">${uiBadge("loading", "planned")} Loading metrics...</td></tr>`;
+    }
     if (!item.ok || !sample) {
       return `<tr data-monitor-node-row data-monitor-node-key="${escapeHtml(item.monitorNodeKey)}" data-node-name="${escapeHtml(name)}" data-node-alerts="0" data-node-stress="-1" data-node-cpu="0" data-node-memory="0" class="${selected ? "selected" : ""}"><td><button type="button" class="monitor-node-select" data-monitor-node-select="${escapeHtml(item.monitorNodeKey)}">${escapeHtml(name)}</button></td><td colspan="6">${escapeHtml(item.error || "No data")}</td></tr>`;
     }
@@ -210,6 +228,7 @@ function renderSparkline(points, key, color) {
 }
 
 function nodeStressScore(item) {
+  if (item.pending) return -0.5;
   const sample = monitorSample(item);
   if (!item.ok || !sample) return -1;
   const disk = primaryDisk(sample.disk);
@@ -236,6 +255,12 @@ function monitorSample(item) {
 
 function renderNodePanel(item, range, selected = true, selectedNodeTab = "overview") {
   const node = item.node || {};
+  if (item.pending) {
+    return `<section class="panel monitor-node-panel" data-monitor-node-panel data-monitor-node-key="${escapeHtml(item.monitorNodeKey)}" data-node-name="${escapeHtml(node.name || node.id || "Node")}" data-node-alerts="0" data-node-stress="-0.5" data-node-cpu="0" data-node-memory="0"${selected ? "" : " hidden"}>
+      <div class="section-header"><h2>${escapeHtml(node.name || node.id || "Node")}</h2>${uiBadge("loading", "planned")}</div>
+      <div class="loading-state"><span class="spinner"></span><span>Loading metrics from this peer...</span></div>
+    </section>`;
+  }
   if (!item.ok) {
     return `<section class="panel monitor-node-panel" data-monitor-node-panel data-monitor-node-key="${escapeHtml(item.monitorNodeKey)}" data-node-name="${escapeHtml(node.name || node.id || "Node")}" data-node-alerts="0" data-node-stress="-1" data-node-cpu="0" data-node-memory="0"${selected ? "" : " hidden"}>
       <div class="section-header"><h2>${escapeHtml(node.name || node.id || "Node")}</h2>${uiBadge("failed", "failed")}</div>
@@ -641,8 +666,15 @@ export function dashboardPanelScript() {
   return `
   var root=(typeof api!=='undefined'&&api.root?api.root.querySelector('[data-system-monitor]'):null)||(document.currentScript&&document.currentScript.closest('[data-system-monitor]'));
   if(!root)return;
-  function panelReload(payload){
-    if(typeof api!=='undefined'&&api&&api.reload)return api.reload(payload);
+  var reloadInFlight=false;
+  var reloadSeq=0;
+  function panelReload(payload,force){
+    if(reloadInFlight&&!force)return;
+    if(typeof api!=='undefined'&&api&&api.reload){
+      var seq=++reloadSeq;
+      reloadInFlight=true;
+      return Promise.resolve(api.reload(payload)).finally(function(){if(seq===reloadSeq)reloadInFlight=false;});
+    }
   }
   function autoRefreshEnabled(){
     var checkbox=root.querySelector('[data-auto-refresh]');
@@ -705,13 +737,13 @@ export function dashboardPanelScript() {
     });
   });
   root.querySelectorAll('[data-range-button]').forEach(function(button){
-    button.addEventListener('click',function(){panelReload(input(button.dataset.rangeButton));});
+    button.addEventListener('click',function(){panelReload(input(button.dataset.rangeButton),true);});
   });
   var customApply=root.querySelector('[data-custom-range-apply]');
   var customMinutes=root.querySelector('[data-custom-minutes]');
   if(customApply&&customMinutes)customApply.addEventListener('click',function(){
     var minutes=Math.max(1,Number(customMinutes.value)||0);
-    if(minutes)panelReload({rangeMs:minutes*60000,maxPoints:Number(root.dataset.maxPoints)||240,autoRefresh:autoRefreshEnabled(),autoRefreshMs:Number(root.dataset.autoRefreshMs)||10000,selectedNodeKey:root.dataset.selectedNodeKey||'',selectedNodeTab:root.dataset.selectedNodeTab||'overview'});
+    if(minutes)panelReload({rangeMs:minutes*60000,maxPoints:Number(root.dataset.maxPoints)||240,autoRefresh:autoRefreshEnabled(),autoRefreshMs:Number(root.dataset.autoRefreshMs)||10000,selectedNodeKey:root.dataset.selectedNodeKey||'',selectedNodeTab:root.dataset.selectedNodeTab||'overview'},true);
   });
   function applyNodeFilters(){
     var text=(root.querySelector('[data-node-filter]')&&root.querySelector('[data-node-filter]').value||'').toLowerCase();
@@ -863,7 +895,7 @@ export function dashboardPanelScript() {
     if(remainingMs<=0){
       scheduleNext();
       renderCountdown();
-      if(document.visibilityState==='visible'&&isPanelVisible())panelReload(input(root.dataset.range));
+      if(document.visibilityState==='visible'&&isPanelVisible())panelReload(input(root.dataset.range),false);
       return;
     }
     renderCountdown();

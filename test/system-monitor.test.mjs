@@ -672,3 +672,32 @@ test("shows only the local node details by default and can switch nodes", () => 
   assert.match(parsed.html, /data-monitor-node-tab-panel="processes"><div class="data-table-wrap">/);
   assert.doesNotMatch(parsed.html, /Swap - 1h/);
 });
+
+test("renders pending aggregate nodes while slow peers are still loading", () => {
+  const payload = {
+    protocolVersion: 1,
+    type: "web-panel",
+    pluginId: "system-monitor",
+    panelId: "dashboard",
+    input: {
+      aggregate: {
+        results: [],
+        pending: [
+          { id: "local", name: "Local node", platform: "linux" },
+          { id: "peer-a", name: "Peer A", platform: "linux" },
+        ],
+      },
+    },
+    settings: {},
+    dataDir: "/tmp/nordrelay-system-monitor-test",
+    permissions: ["system.metrics.read"],
+    context: {},
+  };
+  const parsed = invokePlugin(payload);
+  assert.match(parsed.html, /2 nodes/);
+  assert.match(parsed.html, /0 loaded, 2 pending/);
+  assert.match(parsed.html, /Local node/);
+  assert.match(parsed.html, /Peer A/);
+  assert.match(parsed.html, /Loading metrics/);
+  assert.match(parsed.html, /data-node-stress="-0\.5"/);
+});
